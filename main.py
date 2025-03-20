@@ -29,7 +29,7 @@ def read_exact(sock, n):
 class URL:
     def __init__(self, url):
         self.scheme, rest = url.split("://", 1)
-        # Support view-source scheme.
+        # Handle view-source: URLs by delegation.
         if self.scheme == "view-source":
             self.view_source = True
             self.inner_url = rest
@@ -70,19 +70,19 @@ class URL:
             self.host, port = self.host.split(":", 1)
             self.port = int(port)
 
-    def request(self):
-        # Handle view-source by delegating to the inner URL.
+    def request(self, redirects_remaining=5):
+        # Handle view-source by delegating.
         if self.view_source:
-            return self.inner.request()
-        # Handle data URLs.
+            return self.inner.request(redirects_remaining)
+        # Data scheme.
         if self.scheme == "data":
             return self.data
-        # Handle file URLs.
+        # File scheme.
         if self.scheme == "file":
             with open(self.path, "r", encoding="utf-8") as f:
                 return f.read()
 
-        # For HTTP/HTTPS, attempt to reuse an existing connection.
+        # For HTTP/HTTPS, try to reuse an existing connection.
         key = (self.scheme, self.host, self.port)
         if key in connection_pool:
             s = connection_pool[key]
@@ -104,7 +104,6 @@ class URL:
         for key_hdr, value in headers.items():
             request_str += "{}: {}\r\n".format(key_hdr, value)
         request_str += "\r\n"
-
         s.send(request_str.encode("utf-8"))
 
         # Read the status line.
@@ -113,8 +112,9 @@ class URL:
             version, status, explanation = statusline.split(" ", 2)
         except ValueError:
             raise Exception("Malformed status line: " + statusline)
+        code = int(status)
 
-        # Read headers until an empty line.
+        # Read response headers.
         response_headers = {}
         while True:
             line = read_line(s)
@@ -124,20 +124,30 @@ class URL:
                 header, value = line.split(": ", 1)
                 response_headers[header.casefold()] = value.strip()
 
-        # Ensure we have a Content-Length header.
+        # Handle redirects (status codes 300-399).
+        if 300 <= code < 400:
+            if redirects_remaining <= 0:
+                raise Exception("Too many redirects")
+            if "location" not in response_headers:
+                raise Exception("Redirect status code without Location header")
+            new_url = response_headers["location"]
+            # If the new URL is relative, prepend the original scheme and host.
+            if new_url.startswith("/"):
+                new_url = f"{self.scheme}://{self.host}{new_url}"
+            return URL(new_url).request(redirects_remaining - 1)
+
+        # For non-redirect responses, read exactly Content-Length bytes.
         if "content-length" not in response_headers:
             raise Exception("No Content-Length header in response.")
         content_length = int(response_headers["content-length"])
-
-        # Read exactly the number of bytes specified.
         body_bytes = read_exact(s, content_length)
         content = body_bytes.decode("utf-8", errors="replace")
-        # Do NOT close the socket to allow for reuse.
+        # Keep the socket open for reuse.
         return content
 
 def show(body):
-    # Process and display the response by stripping HTML tags,
-    # and decode &lt; and &gt; entities to < and >.
+    # Process and display the response by stripping HTML tags
+    # and decoding the &lt; and &gt; entities.
     result = []
     in_tag = False
     i = 0
