@@ -6,11 +6,19 @@ import urllib.parse
 class URL:
     def __init__(self, url):
         self.scheme, rest = url.split("://", 1)
+        # Support view-source scheme.
+        if self.scheme == "view-source":
+            self.view_source = True
+            self.inner_url = rest
+            self.inner = URL(self.inner_url)
+            return
+        else:
+            self.view_source = False
+
         assert self.scheme in ["http", "https", "file", "data"]
 
         if self.scheme == "data":
             # For data URLs, the format is: data:[<mediatype>][;base64],<data>
-            # Split on the first comma to separate metadata from the actual data.
             meta, data = rest.split(",", 1)
             # Decode percent-encoded data (if any)
             self.data = urllib.parse.unquote(data)
@@ -41,6 +49,9 @@ class URL:
             self.port = int(port)
 
     def request(self):
+        if self.view_source:
+            # Delegate to the inner URL.
+            return self.inner.request()
         if self.scheme == "data":
             return self.data
         if self.scheme == "file":
@@ -54,13 +65,12 @@ class URL:
             ctx = ssl.create_default_context()
             s = ctx.wrap_socket(s, server_hostname=self.host)
 
-        # Use a headers dictionary for flexibility.
+        # Build HTTP/1.1 request with custom headers.
         headers = {
             "Host": self.host,
             "Connection": "close",
             "User-Agent": "MySimpleBrowser/1.0",
         }
-        # Construct an HTTP/1.1 request.
         request = "GET {} HTTP/1.1\r\n".format(self.path)
         for key, value in headers.items():
             request += "{}: {}\r\n".format(key, value)
@@ -88,7 +98,7 @@ class URL:
         return content
 
 def show(body):
-    # Accumulate text outside of tags.
+    # Extract text content by removing HTML tags and decoding certain entities.
     result = []
     in_tag = False
     i = 0
@@ -105,20 +115,22 @@ def show(body):
         if not in_tag:
             result.append(c)
         i += 1
-
-    # Join the characters and decode the &lt; and &gt; entities.
     text = "".join(result)
     text = text.replace("&lt;", "<").replace("&gt;", ">")
     print(text, end="")
 
 def load(url):
-    body = url.request()
-    show(body)
+    content = url.request()
+    # For view-source URLs, print the raw HTML source.
+    if hasattr(url, "view_source") and url.view_source:
+        print(content, end="")
+    else:
+        show(content)
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        # Default to a local file for testing if no URL is provided.
+        # If no URL is provided, open a default file (e.g., test.html).
         default_file = os.path.abspath("test.html")
         url = "file://" + default_file
     else:
