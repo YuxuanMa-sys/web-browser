@@ -1,60 +1,67 @@
 import socket
 import ssl
 import os
+import urllib.parse
 
 class URL:
     def __init__(self, url):
-        self.scheme, url = url.split("://", 1)
-        assert self.scheme in ["http", "https", "file"]
+        self.scheme, rest = url.split("://", 1)
+        assert self.scheme in ["http", "https", "file", "data"]
+
+        if self.scheme == "data":
+            # For data URLs, the format is: data:[<mediatype>][;base64],<data>
+            # Split on the first comma to separate metadata from the actual data.
+            meta, data = rest.split(",", 1)
+            # Decode percent-encoded data (if any)
+            self.data = urllib.parse.unquote(data)
+            return
 
         if self.scheme == "file":
             # For file URLs, treat the remainder as a file path.
-            # If the path isn't absolute (i.e. doesn't start with '/'), add a leading slash.
-            if not url.startswith("/"):
-                url = "/" + url
-            self.path = url
+            # Ensure it starts with a '/'.
+            if not rest.startswith("/"):
+                rest = "/" + rest
+            self.path = rest
             return
 
+        # For HTTP and HTTPS schemes:
         if self.scheme == "http":
             self.port = 80
         elif self.scheme == "https":
             self.port = 443
 
-        if "/" not in url:
-            url = url + "/"
+        if "/" not in rest:
+            rest = rest + "/"
 
-        self.host, url = url.split("/", 1)
-        self.path = "/" + url
+        self.host, path = rest.split("/", 1)
+        self.path = "/" + path
 
-        # if ports are given in the host (e.g. example.com:8080)
+        # Handle custom port if provided.
         if ":" in self.host:
             self.host, port = self.host.split(":", 1)
             self.port = int(port)
 
     def request(self):
-        # Handle file scheme separately.
+        if self.scheme == "data":
+            return self.data
         if self.scheme == "file":
             with open(self.path, "r", encoding="utf-8") as f:
                 return f.read()
 
-        s = socket.socket(
-            family=socket.AF_INET,
-            type=socket.SOCK_STREAM,
-            proto=socket.IPPROTO_TCP,
-        )
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
         s.connect((self.host, self.port))
 
         if self.scheme == "https":
             ctx = ssl.create_default_context()
             s = ctx.wrap_socket(s, server_hostname=self.host)
 
-        # Build headers dictionary for easy future modifications.
+        # Use a headers dictionary for flexibility.
         headers = {
             "Host": self.host,
             "Connection": "close",
             "User-Agent": "MySimpleBrowser/1.0",
         }
-        # Construct the HTTP request using HTTP/1.1.
+        # Construct an HTTP/1.1 request.
         request = "GET {} HTTP/1.1\r\n".format(self.path)
         for key, value in headers.items():
             request += "{}: {}\r\n".format(key, value)
@@ -79,9 +86,7 @@ class URL:
 
         content = response.read()
         s.close()
-
         return content
-
 
 def show(body):
     in_tag = False
@@ -93,16 +98,14 @@ def show(body):
         elif not in_tag:
             print(c, end="")
 
-
 def load(url):
     body = url.request()
     show(body)
 
-
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:
-        # If no URL is provided, open a default file (e.g., test.html in the current directory)
+        # Default to a local file for testing if no URL is provided.
         default_file = os.path.abspath("test.html")
         url = "file://" + default_file
     else:
