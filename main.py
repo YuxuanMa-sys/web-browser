@@ -3,11 +3,11 @@ import ssl
 import os
 import urllib.parse
 import time
+import gzip
 
 # Global connection pool for persistent connections
 connection_pool = {}
 # Global cache for HTTP responses: key -> (content, expire_time)
-# expire_time is a UNIX timestamp (or None for no expiration)
 response_cache = {}
 
 class URL:
@@ -90,11 +90,12 @@ class URL:
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             connection_pool[key] = s
 
-        # Build an HTTP/1.1 request with keep-alive.
+        # Build HTTP/1.1 request with keep-alive and gzip support.
         headers = {
             "Host": self.host,
             "Connection": "keep-alive",
             "User-Agent": "MySimpleBrowser/1.0",
+            "Accept-Encoding": "gzip",
         }
         request_data = f"GET {self.path} HTTP/1.1\r\n"
         for hdr, val in headers.items():
@@ -102,7 +103,7 @@ class URL:
         request_data += "\r\n"
         s.sendall(request_data.encode("utf-8"))
 
-        # Use binary mode to read exact Content-Length bytes.
+        # Use binary mode to read response.
         response = s.makefile("rb", newline=None)
         status_line = response.readline()
         if not status_line:
@@ -139,15 +140,47 @@ class URL:
             print(f"Redirecting to {new_url}")
             return URL(new_url).request(redirects_remaining - 1)
 
-        # Read exactly Content-Length bytes.
-        if "content-length" not in response_headers:
-            raise Exception("No Content-Length header in response.")
-        length = int(response_headers["content-length"])
-        body_bytes = response.read(length)
+        # Read the response body.
+        # If Transfer-Encoding is chunked, use a chunked reader.
+        if response_headers.get("transfer-encoding", "").lower() == "chunked":
+            body_bytes = b""
+            while True:
+                # Read the chunk size line.
+                chunk_size_line = response.readline()
+                if not chunk_size_line:
+                    break
+                chunk_size_str = chunk_size_line.decode("utf-8").strip()
+                try:
+                    chunk_size = int(chunk_size_str, 16)
+                except ValueError:
+                    raise Exception(f"Invalid chunk size: {chunk_size_str}")
+                if chunk_size == 0:
+                    # Read and discard any trailing header lines and final CRLF.
+                    response.readline()
+                    break
+                chunk = response.read(chunk_size)
+                body_bytes += chunk
+                # Read the trailing CRLF after each chunk.
+                response.read(2)
+        elif "content-length" in response_headers:
+            length = int(response_headers["content-length"])
+            body_bytes = response.read(length)
+        else:
+            # No Content-Length or chunked Transfer-Encoding.
+            # Read until EOF.
+            body_bytes = response.read()
+
+        # If the response is gzip-compressed, decompress it.
+        if response_headers.get("content-encoding", "").lower() == "gzip":
+            try:
+                body_bytes = gzip.decompress(body_bytes)
+            except Exception as e:
+                raise Exception(f"Failed to decompress gzip data: {e}")
+
+        # Decode the body bytes into a string.
         content = body_bytes.decode("utf-8", errors="replace")
 
         # --- Caching logic ---
-        # Only cache responses with status codes 200, 301, or 404.
         if code in (200, 301, 404):
             allow_cache = False
             expire_time_val = None
@@ -166,7 +199,6 @@ class URL:
                 else:
                     allow_cache = False
             else:
-                # If Cache-Control is absent, assume caching is allowed indefinitely.
                 allow_cache = True
                 expire_time_val = None
 
@@ -174,7 +206,7 @@ class URL:
                 response_cache[canonical_url] = (content, expire_time_val)
                 print("Caching response for", canonical_url)
 
-        # Do not close the socket to keep it alive.
+        # Do not close the socket (keep-alive).
         return content
 
 def show(body):
