@@ -217,7 +217,7 @@ class Browser:
             width=WIDTH,
             height=HEIGHT
         )
-        # Make canvas resizable.
+        # Allow the canvas to resize.
         self.canvas.pack(fill="both", expand=True)
         self.scroll = 0
 
@@ -230,7 +230,7 @@ class Browser:
         self.window.bind("<Button-4>", self.on_mousewheel_up)   # Linux scroll up
         self.window.bind("<Button-5>", self.on_mousewheel_down) # Linux scroll down
 
-        # Bind configure event to detect resizing.
+        # Bind canvas configure event to detect resizing.
         self.canvas.bind("<Configure>", self.on_configure)
 
     def load(self, url):
@@ -239,16 +239,40 @@ class Browser:
             print(content, end="")
         else:
             text = lex(content)
-            self.raw_text = text  # Store the raw text for re-layout on resize.
+            self.raw_text = text  # Save raw text for re-layout on resize.
             self.display_list = layout(text, self.canvas.winfo_width())
             self.draw()
 
     def draw(self):
         self.canvas.delete("all")
+        visible_height = self.canvas.winfo_height()
+        # Compute document height from the display_list.
+        max_y = max((y for (x, y, c) in self.display_list), default=0)
+        # Compute the maximum scroll value.
+        max_scroll = max(0, max_y - visible_height)
+        # Clamp scroll to maximum.
+        if self.scroll > max_scroll:
+            self.scroll = max_scroll
+
+        # Draw text entries.
         for x, y, c in self.display_list:
-            if y - self.scroll > self.canvas.winfo_height() or y - self.scroll < 0:
+            if (y - self.scroll) < 0 or (y - self.scroll) > visible_height:
                 continue
             self.canvas.create_text(x, y - self.scroll, text=c)
+
+        # Draw scrollbar if document is taller than the view.
+        if max_y > visible_height:
+            scrollbar_width = 10
+            # Thumb height proportional to visible area / document height.
+            thumb_height = visible_height * (visible_height / max_y)
+            thumb_height = max(thumb_height, 20)  # Ensure a minimum thumb height.
+            # Thumb vertical offset reflects current scroll position.
+            thumb_y = (self.scroll / max_scroll) * (visible_height - thumb_height) if max_scroll > 0 else 0
+            x0 = self.canvas.winfo_width() - scrollbar_width
+            y0 = thumb_y
+            x1 = self.canvas.winfo_width()
+            y1 = thumb_y + thumb_height
+            self.canvas.create_rectangle(x0, y0, x1, y1, fill="blue")
 
     def scrolldown(self, event):
         self.scroll += SCROLL_STEP
@@ -278,12 +302,12 @@ class Browser:
         self.draw()
 
     def on_configure(self, event):
-        # When the canvas is resized, re-layout the text.
+        # When resized, re-layout the text using the new canvas width.
         new_width = event.width
-        # Recompute layout using the stored raw text and new width.
         if self.raw_text:
             self.display_list = layout(self.raw_text, new_width)
             self.draw()
+
 
 def lex(body):
     text = ""
