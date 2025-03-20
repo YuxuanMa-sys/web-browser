@@ -37,52 +37,62 @@ def get_emoji_image(ch):
         emoji_images[ch] = None
         return None
 
+
 class URL:
     def __init__(self, url):
-        # Handle view-source URLs first.
-        if url.startswith("view-source:"):
-            self.view_source = True
-            inner_url = url[len("view-source:"):]
-            self.inner = URL(inner_url)
-            return
-        else:
-            self.view_source = False
+        # Default to not being about:blank.
+        self.about_blank = False
+        try:
+            # If the URL is about:blank, mark it and return.
+            if url.lower() == "about:blank":
+                self.about_blank = True
+                return
+            # Check for the "://" separator; if missing, treat it as malformed.
+            if "://" not in url:
+                raise ValueError("Malformed URL")
 
-        # Parse the standard scheme://... format.
-        self.scheme, rest = url.split("://", 1)
-        assert self.scheme in ["http", "https", "file", "data"]
+            self.scheme, rest = url.split("://", 1)
+            # Validate the scheme.
+            if self.scheme not in ["http", "https", "file", "data"]:
+                raise ValueError("Unsupported URL scheme")
 
-        if self.scheme == "data":
-            # data URL: data:[<mediatype>][;base64],<data>
-            meta, data = rest.split(",", 1)
-            self.data = urllib.parse.unquote(data)
-            return
+            if self.scheme == "data":
+                # data URL: data:[<mediatype>][;base64],<data>
+                meta, data = rest.split(",", 1)
+                self.data = urllib.parse.unquote(data)
+                return
 
-        if self.scheme == "file":
-            # file URL: treat remainder as file path.
-            if not rest.startswith("/"):
-                rest = "/" + rest
-            self.path = rest
-            return
+            if self.scheme == "file":
+                # file URL: treat the remainder as file path.
+                if not rest.startswith("/"):
+                    rest = "/" + rest
+                self.path = rest
+                return
 
-        # For HTTP and HTTPS, set default port.
-        if self.scheme == "http":
-            self.port = 80
-        elif self.scheme == "https":
-            self.port = 443
+            # For HTTP and HTTPS, set default port.
+            if self.scheme == "http":
+                self.port = 80
+            elif self.scheme == "https":
+                self.port = 443
 
-        if "/" not in rest:
-            rest += "/"
+            if "/" not in rest:
+                rest += "/"
 
-        self.host, path = rest.split("/", 1)
-        self.path = "/" + path
+            self.host, path = rest.split("/", 1)
+            self.path = "/" + path
 
-        # If host includes a port, parse it.
-        if ":" in self.host:
-            self.host, port_str = self.host.split(":", 1)
-            self.port = int(port_str)
+            # If host includes a port, parse it.
+            if ":" in self.host:
+                self.host, port_str = self.host.split(":", 1)
+                self.port = int(port_str)
+        except Exception as e:
+            print("Malformed URL encountered, defaulting to about:blank:", e)
+            self.about_blank = True
 
     def request(self, redirects_remaining=5):
+        # If about:blank is flagged, return an empty page.
+        if self.about_blank:
+            return ""
         # Delegate view-source requests.
         if self.view_source:
             return self.inner.request(redirects_remaining)
