@@ -3,6 +3,29 @@ import ssl
 import os
 import urllib.parse
 
+# Global connection pool for keep-alive sockets: keys are (scheme, host, port)
+connection_pool = {}
+
+def read_line(sock):
+    """Read bytes from the socket until a CRLF is encountered."""
+    line = b""
+    while not line.endswith(b"\r\n"):
+        chunk = sock.recv(1)
+        if not chunk:
+            break
+        line += chunk
+    return line.decode("utf-8")
+
+def read_exact(sock, n):
+    """Read exactly n bytes from the socket."""
+    data = b""
+    while len(data) < n:
+        chunk = sock.recv(n - len(data))
+        if not chunk:
+            break
+        data += chunk
+    return data
+
 class URL:
     def __init__(self, url):
         self.scheme, rest = url.split("://", 1)
@@ -20,7 +43,6 @@ class URL:
         if self.scheme == "data":
             # For data URLs, the format is: data:[<mediatype>][;base64],<data>
             meta, data = rest.split(",", 1)
-            # Decode percent-encoded data (if any)
             self.data = urllib.parse.unquote(data)
             return
 
@@ -31,7 +53,7 @@ class URL:
             self.path = rest
             return
 
-        # For HTTP and HTTPS schemes:
+        # For HTTP and HTTPS:
         if self.scheme == "http":
             self.port = 80
         elif self.scheme == "https":
@@ -49,56 +71,73 @@ class URL:
             self.port = int(port)
 
     def request(self):
+        # Handle view-source by delegating to the inner URL.
         if self.view_source:
-            # Delegate to the inner URL.
             return self.inner.request()
+        # Handle data URLs.
         if self.scheme == "data":
             return self.data
+        # Handle file URLs.
         if self.scheme == "file":
             with open(self.path, "r", encoding="utf-8") as f:
                 return f.read()
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
-        s.connect((self.host, self.port))
+        # For HTTP/HTTPS, attempt to reuse an existing connection.
+        key = (self.scheme, self.host, self.port)
+        if key in connection_pool:
+            s = connection_pool[key]
+        else:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
+            s.connect((self.host, self.port))
+            if self.scheme == "https":
+                ctx = ssl.create_default_context()
+                s = ctx.wrap_socket(s, server_hostname=self.host)
+            connection_pool[key] = s
 
-        if self.scheme == "https":
-            ctx = ssl.create_default_context()
-            s = ctx.wrap_socket(s, server_hostname=self.host)
-
-        # Build HTTP/1.1 request with custom headers.
+        # Build an HTTP/1.1 request with keep-alive.
         headers = {
             "Host": self.host,
-            "Connection": "close",
+            "Connection": "keep-alive",
             "User-Agent": "MySimpleBrowser/1.0",
         }
-        request = "GET {} HTTP/1.1\r\n".format(self.path)
-        for key, value in headers.items():
-            request += "{}: {}\r\n".format(key, value)
-        request += "\r\n"
+        request_str = "GET {} HTTP/1.1\r\n".format(self.path)
+        for key_hdr, value in headers.items():
+            request_str += "{}: {}\r\n".format(key_hdr, value)
+        request_str += "\r\n"
 
-        s.send(request.encode("utf-8"))
+        s.send(request_str.encode("utf-8"))
 
-        response = s.makefile("r", encoding="utf-8", newline="\r\n")
-        statusline = response.readline()
-        version, status, explanation = statusline.split(" ", 2)
+        # Read the status line.
+        statusline = read_line(s)
+        try:
+            version, status, explanation = statusline.split(" ", 2)
+        except ValueError:
+            raise Exception("Malformed status line: " + statusline)
 
+        # Read headers until an empty line.
         response_headers = {}
         while True:
-            line = response.readline()
-            if line == "\r\n":
+            line = read_line(s)
+            if line in ("\r\n", "\n", ""):
                 break
-            header, value = line.split(": ", 1)
-            response_headers[header.casefold()] = value.strip()
+            if ": " in line:
+                header, value = line.split(": ", 1)
+                response_headers[header.casefold()] = value.strip()
 
-        assert "transfer-encoding" not in response_headers
-        assert "content-encoding" not in response_headers
+        # Ensure we have a Content-Length header.
+        if "content-length" not in response_headers:
+            raise Exception("No Content-Length header in response.")
+        content_length = int(response_headers["content-length"])
 
-        content = response.read()
-        s.close()
+        # Read exactly the number of bytes specified.
+        body_bytes = read_exact(s, content_length)
+        content = body_bytes.decode("utf-8", errors="replace")
+        # Do NOT close the socket to allow for reuse.
         return content
 
 def show(body):
-    # Extract text content by removing HTML tags and decoding certain entities.
+    # Process and display the response by stripping HTML tags,
+    # and decode &lt; and &gt; entities to < and >.
     result = []
     in_tag = False
     i = 0
@@ -121,7 +160,7 @@ def show(body):
 
 def load(url):
     content = url.request()
-    # For view-source URLs, print the raw HTML source.
+    # For view-source URLs, output the raw content.
     if hasattr(url, "view_source") and url.view_source:
         print(content, end="")
     else:
