@@ -42,6 +42,7 @@ class URL:
     def __init__(self, url):
         # Default to not being about:blank.
         self.about_blank = False
+        self.view_source = False
         try:
             # If the URL is about:blank, mark it and return.
             if url.lower() == "about:blank":
@@ -362,27 +363,50 @@ def lex(body):
     print(html_text, end="")
     return text
 
+# Add at the top near the other global definitions:
+RTL_MODE = False  # default mode is left-to-right
+
 def layout(text, width):
     display_list = []
-    cursor_x, cursor_y = HSTEP, VSTEP
-    for c in text:
-        if c == "\n":
-            cursor_x = HSTEP
-            cursor_y += VSTEP * 2
+    # Split the text into lines based on newline characters.
+    lines = text.split("\n")
+    cursor_y = VSTEP  # Start vertical position for first line.
+    for line in lines:
+        # Determine line length in pixels.
+        line_length = len(line) * HSTEP
+        if RTL_MODE:
+            # Right-to-left: compute starting x so that line is right-aligned.
+            start_x = max(HSTEP, width - line_length)
+            cursor_x = start_x
+            for ch in line:
+                # Check for emoji support.
+                is_emoji = get_emoji_image(ch) is not None
+                display_list.append((cursor_x, cursor_y, ch, is_emoji))
+                cursor_x += HSTEP
         else:
-            # Check if the character is an emoji (if an image exists for it).
-            img = get_emoji_image(c)
-            if img is not None:
-                display_list.append((cursor_x, cursor_y, c, True))
-            else:
-                display_list.append((cursor_x, cursor_y, c, False))
-            cursor_x += HSTEP
-            if cursor_x >= width - HSTEP:
-                cursor_y += VSTEP
-                cursor_x = HSTEP
+            # Left-to-right: start at the left margin.
+            cursor_x = HSTEP
+            for ch in line:
+                is_emoji = get_emoji_image(ch) is not None
+                display_list.append((cursor_x, cursor_y, ch, is_emoji))
+                cursor_x += HSTEP
+        # Add extra vertical space to simulate a paragraph break.
+        cursor_y += VSTEP * 2
     return display_list
 
+# In your main block, process command-line arguments to set RTL_MODE.
 if __name__ == '__main__':
     import sys
-    Browser().load(URL(sys.argv[1]))
+    args = sys.argv[1:]
+    url_str = None
+    # Check if the RTL flag is provided.
+    if "--rtl" in args:
+        RTL_MODE = True
+        args.remove("--rtl")
+    if args:
+        url_str = args[0]
+    else:
+        url_str = "about:blank"
+    Browser().load(URL(url_str))
     tkinter.mainloop()
+
