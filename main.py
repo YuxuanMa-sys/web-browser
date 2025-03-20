@@ -18,7 +18,6 @@ class URL:
 
         if self.scheme == "file":
             # For file URLs, treat the remainder as a file path.
-            # Ensure it starts with a '/'.
             if not rest.startswith("/"):
                 rest = "/" + rest
             self.path = rest
@@ -89,14 +88,28 @@ class URL:
         return content
 
 def show(body):
+    # Accumulate text outside of tags.
+    result = []
     in_tag = False
-    for c in body:
+    i = 0
+    while i < len(body):
+        c = body[i]
         if c == "<":
             in_tag = True
+            i += 1
+            continue
         elif c == ">":
             in_tag = False
-        elif not in_tag:
-            print(c, end="")
+            i += 1
+            continue
+        if not in_tag:
+            result.append(c)
+        i += 1
+
+    # Join the characters and decode the &lt; and &gt; entities.
+    text = "".join(result)
+    text = text.replace("&lt;", "<").replace("&gt;", ">")
+    print(text, end="")
 
 def load(url):
     body = url.request()
