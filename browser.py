@@ -6,9 +6,10 @@ import time
 import gzip
 import tkinter
 
+# Default values, used as fallbacks.
 WIDTH, HEIGHT = 800, 600
 SCROLL_STEP = 100
-HSTEP, VSTEP = 13, 18  # Used by layout and drawing functions
+HSTEP, VSTEP = 13, 18
 
 # Global connection pool for persistent connections
 connection_pool = {}
@@ -203,18 +204,21 @@ class URL:
                 response_cache[canonical_url] = (content, expire_time_val)
                 print("Caching response for", canonical_url)
 
+        # Do not close the socket (keep-alive).
         return content
 
 class Browser:
     def __init__(self):
         self.display_list = None
+        self.raw_text = ""
         self.window = tkinter.Tk()
         self.canvas = tkinter.Canvas(
             self.window,
             width=WIDTH,
             height=HEIGHT
         )
-        self.canvas.pack()
+        # Make canvas resizable.
+        self.canvas.pack(fill="both", expand=True)
         self.scroll = 0
 
         # Bind keyboard scrolling events.
@@ -226,20 +230,23 @@ class Browser:
         self.window.bind("<Button-4>", self.on_mousewheel_up)   # Linux scroll up
         self.window.bind("<Button-5>", self.on_mousewheel_down) # Linux scroll down
 
+        # Bind configure event to detect resizing.
+        self.canvas.bind("<Configure>", self.on_configure)
+
     def load(self, url):
         content = url.request()
         if getattr(url, "view_source", False):
             print(content, end="")
         else:
             text = lex(content)
-            self.display_list = layout(text)
+            self.raw_text = text  # Store the raw text for re-layout on resize.
+            self.display_list = layout(text, self.canvas.winfo_width())
             self.draw()
 
     def draw(self):
         self.canvas.delete("all")
         for x, y, c in self.display_list:
-            # Only draw text within the visible area.
-            if y - self.scroll > HEIGHT or y - self.scroll < 0:
+            if y - self.scroll > self.canvas.winfo_height() or y - self.scroll < 0:
                 continue
             self.canvas.create_text(x, y - self.scroll, text=c)
 
@@ -254,8 +261,6 @@ class Browser:
         self.draw()
 
     def on_mousewheel(self, event):
-        # Windows/macOS: event.delta is typically a multiple of 120.
-        # Invert delta so that positive values scroll up.
         scroll_amount = - (event.delta / 120) * SCROLL_STEP
         self.scroll += scroll_amount
         if self.scroll < 0:
@@ -271,6 +276,14 @@ class Browser:
     def on_mousewheel_down(self, event):
         self.scroll += SCROLL_STEP
         self.draw()
+
+    def on_configure(self, event):
+        # When the canvas is resized, re-layout the text.
+        new_width = event.width
+        # Recompute layout using the stored raw text and new width.
+        if self.raw_text:
+            self.display_list = layout(self.raw_text, new_width)
+            self.draw()
 
 def lex(body):
     text = ""
@@ -296,7 +309,7 @@ def lex(body):
     print(html_text, end="")
     return text
 
-def layout(text):
+def layout(text, width):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     for c in text:
@@ -306,7 +319,7 @@ def layout(text):
         else:
             display_list.append((cursor_x, cursor_y, c))
             cursor_x += HSTEP
-            if cursor_x >= WIDTH - HSTEP:
+            if cursor_x >= width - HSTEP:
                 cursor_y += VSTEP
                 cursor_x = HSTEP
     return display_list
