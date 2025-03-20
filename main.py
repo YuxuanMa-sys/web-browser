@@ -3,13 +3,12 @@ import ssl
 import os
 import urllib.parse
 
-# A global pool for persistent connections, keyed by (scheme, host, port)
+# Global connection pool for persistent connections
 connection_pool = {}
-
 
 class URL:
     def __init__(self, url):
-        # 1) Check for "view-source:" prefix first.
+        # Handle view-source URLs first
         if url.startswith("view-source:"):
             self.view_source = True
             inner_url = url[len("view-source:"):]
@@ -18,24 +17,24 @@ class URL:
         else:
             self.view_source = False
 
-        # 2) Parse the normal scheme://... format.
+        # Parse standard URLs
         self.scheme, rest = url.split("://", 1)
         assert self.scheme in ["http", "https", "file", "data"]
 
         if self.scheme == "data":
-            # For data URLs: data:[<mediatype>][;base64],<data>
+            # data URL: data:[<mediatype>][;base64],<data>
             meta, data = rest.split(",", 1)
             self.data = urllib.parse.unquote(data)
             return
 
         if self.scheme == "file":
-            # For file URLs, treat the remainder as a file path.
+            # file URL: treat the remainder as a file path
             if not rest.startswith("/"):
                 rest = "/" + rest
             self.path = rest
             return
 
-        # For HTTP and HTTPS, figure out host, port, and path.
+        # For HTTP and HTTPS, set default port
         if self.scheme == "http":
             self.port = 80
         elif self.scheme == "https":
@@ -47,27 +46,22 @@ class URL:
         self.host, path = rest.split("/", 1)
         self.path = "/" + path
 
-        # If the host contains a port, parse it out.
+        # If host includes a port, parse it out
         if ":" in self.host:
             self.host, port_str = self.host.split(":", 1)
             self.port = int(port_str)
 
-    def request(self):
-        # 1) If this is a view-source URL, delegate to the inner URL.
+    def request(self, redirects_remaining=5):
+        # Delegate view-source requests
         if self.view_source:
-            return self.inner.request()
-
-        # 2) data URL
+            return self.inner.request(redirects_remaining)
         if self.scheme == "data":
             return self.data
-
-        # 3) file URL
         if self.scheme == "file":
             with open(self.path, "r", encoding="utf-8") as f:
                 return f.read()
 
-        # 4) HTTP/HTTPS
-        # Check if we already have a socket for this (scheme, host, port).
+        # For HTTP/HTTPS: try to reuse an existing connection
         key = (self.scheme, self.host, self.port)
         if key in connection_pool:
             print(f"Reusing connection for {key} (socket id: {id(connection_pool[key])})")
@@ -81,7 +75,7 @@ class URL:
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             connection_pool[key] = s
 
-        # Build and send an HTTP/1.1 request with keep-alive.
+        # Build HTTP/1.1 request with keep-alive
         headers = {
             "Host": self.host,
             "Connection": "keep-alive",
@@ -93,25 +87,21 @@ class URL:
         request_data += "\r\n"
         s.sendall(request_data.encode("utf-8"))
 
-        # We’ll use a file-like object in binary mode to ensure exact byte reading.
+        # Use binary mode to read exact Content-Length bytes
         response = s.makefile("rb", newline=None)
-
-        # Read the status line (e.g. b"HTTP/1.1 200 OK\r\n")
         status_line = response.readline()
         if not status_line:
             raise Exception("No status line received (connection closed?)")
         status_line = status_line.decode("utf-8", errors="replace").strip()
-
         parts = status_line.split(" ", 2)
         if len(parts) < 2:
             raise Exception(f"Malformed status line: {status_line}")
         version = parts[0]
         status_code = parts[1]
         explanation = parts[2] if len(parts) > 2 else ""
-
         code = int(status_code)
 
-        # Read headers until an empty line.
+        # Read response headers
         response_headers = {}
         while True:
             line = response.readline()
@@ -122,23 +112,31 @@ class URL:
                 header, value = line_str.split(": ", 1)
                 response_headers[header.lower()] = value.strip()
 
-        # Make sure we have a Content-Length so we know how many bytes to read.
+        # Handle redirects (status codes 300-399)
+        if 300 <= code < 400:
+            if redirects_remaining <= 0:
+                raise Exception("Too many redirects")
+            if "location" not in response_headers:
+                raise Exception("Redirect response missing Location header")
+            new_url = response_headers["location"]
+            # If relative URL, prepend scheme and host
+            if new_url.startswith("/"):
+                new_url = f"{self.scheme}://{self.host}{new_url}"
+            print(f"Redirecting to {new_url}")
+            return URL(new_url).request(redirects_remaining - 1)
+
+        # Read exactly the number of bytes specified in Content-Length
         if "content-length" not in response_headers:
             raise Exception("No Content-Length header in response.")
         length = int(response_headers["content-length"])
+        body_bytes = response.read(length)
+        content = body_bytes.decode("utf-8", errors="replace")
 
-        # Read exactly 'length' bytes from the body.
-        body = response.read(length)
-        content = body.decode("utf-8", errors="replace")
-
-        # IMPORTANT: Do not close the socket => keep-alive
-        # response.close() also is not called, so the socket remains open for reuse.
-
+        # Do not close the socket; keep it alive for future reuse.
         return content
 
-
 def show(body):
-    # Remove HTML tags, decode &lt; and &gt; to < and >.
+    # Strip HTML tags and decode &lt; and &gt; entities
     result = []
     in_tag = False
     i = 0
@@ -159,27 +157,19 @@ def show(body):
     text = text.replace("&lt;", "<").replace("&gt;", ">")
     print(text, end="")
 
-
 def load(url):
-    body = url.request()
-    # If view-source, print the raw HTML source instead of stripping tags.
+    content = url.request()
+    # If view-source is set, output raw HTML; otherwise, strip tags
     if getattr(url, "view_source", False):
-        print(body, end="")
+        print(content, end="")
     else:
-        show(body)
-
+        show(content)
 
 if __name__ == "__main__":
     import sys
-
     if len(sys.argv) < 2:
-        url_str = "http://example.com"
+        default_file = os.path.abspath("test.html")
+        url_str = "file://" + default_file
     else:
         url_str = sys.argv[1]
-
-    # Make multiple requests in the same process to observe connection reuse.
-    for i in range(2):
-        print(f"\nRequest #{i + 1}")
-        load(URL(url_str))
-        print("\n--- Request complete ---\n")
-
+    load(URL(url_str))
