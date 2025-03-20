@@ -4,6 +4,10 @@ import os
 import urllib.parse
 import time
 import gzip
+import tkinter
+
+WIDTH, HEIGHT = 800, 600
+SCROLL_STEP = 100
 
 # Global connection pool for persistent connections
 connection_pool = {}
@@ -209,7 +213,49 @@ class URL:
         # Do not close the socket (keep-alive).
         return content
 
-def show(body):
+
+
+class Browser:
+    def __init__(self):
+        self.display_list = None
+        self.window = tkinter.Tk()
+        self.canvas = tkinter.Canvas(
+            self.window,
+            width = WIDTH,
+            height = HEIGHT
+        )
+        self.canvas.pack()
+        self.scroll = 0
+        self.window.bind("<KeyPress-Down>", self.scrolldown)
+
+    def load(self, url):
+        content = url.request()
+        if getattr(url, "view_source", False):
+            print(content, end="")
+        else:
+            text = lex(content)
+            self.display_list = layout(text)
+            self.draw()
+
+    def draw(self):
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            if y > self.scroll + HEIGHT: continue
+            if y + VSTEP < self.scroll: continue
+            self.canvas.create_text(x, y - self.scroll, text=c)
+
+        # self.canvas.create_rectangle(10, 20, 400, 300)
+        # self.canvas.create_oval(100, 100, 150, 150)
+        # self.canvas.create_text(200, 150, text = 'Hi')
+
+
+    def scrolldown(self, event):
+        self.scroll += SCROLL_STEP
+        self.draw()
+
+
+def lex(body):
+    text = ""
     # Remove HTML tags and decode &lt; and &gt; entities.
     result = []
     in_tag = False
@@ -226,23 +272,37 @@ def show(body):
             continue
         if not in_tag:
             result.append(c)
+            text += c
         i += 1
-    text = "".join(result)
-    text = text.replace("&lt;", "<").replace("&gt;", ">")
-    print(text, end="")
+    html_text = "".join(result)
+    html_text = html_text.replace("&lt;", "<").replace("&gt;", ">")
+    print(html_text, end="")
+    return text
 
-def load(url):
-    content = url.request()
-    if getattr(url, "view_source", False):
-        print(content, end="")
-    else:
-        show(content)
+HSTEP, VSTEP = 13, 18
 
-if __name__ == "__main__":
+def layout(text):
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+    for c in text:
+        display_list.append((cursor_x, cursor_y, c))
+        cursor_x += HSTEP
+        if cursor_x >= WIDTH - HSTEP:
+            cursor_y += VSTEP
+            cursor_x = HSTEP
+
+    return display_list
+
+# if __name__ == "__main__":
+#     import sys
+#     if len(sys.argv) < 2:
+#         default_file = os.path.abspath("test.html")
+#         url_str = "file://" + default_file
+#     else:
+#         url_str = sys.argv[1]
+#     load(URL(url_str))
+
+if __name__ == '__main__':
     import sys
-    if len(sys.argv) < 2:
-        default_file = os.path.abspath("test.html")
-        url_str = "file://" + default_file
-    else:
-        url_str = sys.argv[1]
-    load(URL(url_str))
+    Browser().load(URL(sys.argv[1]))
+    tkinter.mainloop()
