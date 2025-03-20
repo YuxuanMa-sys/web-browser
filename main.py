@@ -2,13 +2,17 @@ import socket
 import ssl
 import os
 import urllib.parse
+import time
 
 # Global connection pool for persistent connections
 connection_pool = {}
+# Global cache for HTTP responses: key -> (content, expire_time)
+# expire_time is a UNIX timestamp (or None for no expiration)
+response_cache = {}
 
 class URL:
     def __init__(self, url):
-        # Handle view-source URLs first
+        # Handle view-source URLs first.
         if url.startswith("view-source:"):
             self.view_source = True
             inner_url = url[len("view-source:"):]
@@ -17,7 +21,7 @@ class URL:
         else:
             self.view_source = False
 
-        # Parse standard URLs
+        # Parse the standard scheme://... format.
         self.scheme, rest = url.split("://", 1)
         assert self.scheme in ["http", "https", "file", "data"]
 
@@ -28,13 +32,13 @@ class URL:
             return
 
         if self.scheme == "file":
-            # file URL: treat the remainder as a file path
+            # file URL: treat remainder as file path.
             if not rest.startswith("/"):
                 rest = "/" + rest
             self.path = rest
             return
 
-        # For HTTP and HTTPS, set default port
+        # For HTTP and HTTPS, set default port.
         if self.scheme == "http":
             self.port = 80
         elif self.scheme == "https":
@@ -46,13 +50,13 @@ class URL:
         self.host, path = rest.split("/", 1)
         self.path = "/" + path
 
-        # If host includes a port, parse it out
+        # If host includes a port, parse it.
         if ":" in self.host:
             self.host, port_str = self.host.split(":", 1)
             self.port = int(port_str)
 
     def request(self, redirects_remaining=5):
-        # Delegate view-source requests
+        # Delegate view-source requests.
         if self.view_source:
             return self.inner.request(redirects_remaining)
         if self.scheme == "data":
@@ -61,7 +65,18 @@ class URL:
             with open(self.path, "r", encoding="utf-8") as f:
                 return f.read()
 
-        # For HTTP/HTTPS: try to reuse an existing connection
+        # For HTTP/HTTPS, construct the canonical URL.
+        canonical_url = f"{self.scheme}://{self.host}:{self.port}{self.path}"
+        # Check the cache first.
+        if canonical_url in response_cache:
+            cached_content, expire_time = response_cache[canonical_url]
+            if expire_time is None or time.time() < expire_time:
+                print("Serving from cache")
+                return cached_content
+            else:
+                del response_cache[canonical_url]
+
+        # Reuse or create a persistent connection.
         key = (self.scheme, self.host, self.port)
         if key in connection_pool:
             print(f"Reusing connection for {key} (socket id: {id(connection_pool[key])})")
@@ -75,7 +90,7 @@ class URL:
                 s = ctx.wrap_socket(s, server_hostname=self.host)
             connection_pool[key] = s
 
-        # Build HTTP/1.1 request with keep-alive
+        # Build an HTTP/1.1 request with keep-alive.
         headers = {
             "Host": self.host,
             "Connection": "keep-alive",
@@ -87,7 +102,7 @@ class URL:
         request_data += "\r\n"
         s.sendall(request_data.encode("utf-8"))
 
-        # Use binary mode to read exact Content-Length bytes
+        # Use binary mode to read exact Content-Length bytes.
         response = s.makefile("rb", newline=None)
         status_line = response.readline()
         if not status_line:
@@ -101,7 +116,7 @@ class URL:
         explanation = parts[2] if len(parts) > 2 else ""
         code = int(status_code)
 
-        # Read response headers
+        # Read response headers.
         response_headers = {}
         while True:
             line = response.readline()
@@ -112,31 +127,58 @@ class URL:
                 header, value = line_str.split(": ", 1)
                 response_headers[header.lower()] = value.strip()
 
-        # Handle redirects (status codes 300-399)
+        # Handle redirects (status codes 300-399).
         if 300 <= code < 400:
             if redirects_remaining <= 0:
                 raise Exception("Too many redirects")
             if "location" not in response_headers:
                 raise Exception("Redirect response missing Location header")
             new_url = response_headers["location"]
-            # If relative URL, prepend scheme and host
             if new_url.startswith("/"):
                 new_url = f"{self.scheme}://{self.host}{new_url}"
             print(f"Redirecting to {new_url}")
             return URL(new_url).request(redirects_remaining - 1)
 
-        # Read exactly the number of bytes specified in Content-Length
+        # Read exactly Content-Length bytes.
         if "content-length" not in response_headers:
             raise Exception("No Content-Length header in response.")
         length = int(response_headers["content-length"])
         body_bytes = response.read(length)
         content = body_bytes.decode("utf-8", errors="replace")
 
-        # Do not close the socket; keep it alive for future reuse.
+        # --- Caching logic ---
+        # Only cache responses with status codes 200, 301, or 404.
+        if code in (200, 301, 404):
+            allow_cache = False
+            expire_time_val = None
+            cache_control = response_headers.get("cache-control")
+            if cache_control:
+                cache_control = cache_control.lower().strip()
+                if cache_control == "no-store":
+                    allow_cache = False
+                elif cache_control.startswith("max-age=") and "," not in cache_control:
+                    try:
+                        max_age = int(cache_control[len("max-age="):])
+                        allow_cache = True
+                        expire_time_val = time.time() + max_age
+                    except ValueError:
+                        allow_cache = False
+                else:
+                    allow_cache = False
+            else:
+                # If Cache-Control is absent, assume caching is allowed indefinitely.
+                allow_cache = True
+                expire_time_val = None
+
+            if allow_cache:
+                response_cache[canonical_url] = (content, expire_time_val)
+                print("Caching response for", canonical_url)
+
+        # Do not close the socket to keep it alive.
         return content
 
 def show(body):
-    # Strip HTML tags and decode &lt; and &gt; entities
+    # Remove HTML tags and decode &lt; and &gt; entities.
     result = []
     in_tag = False
     i = 0
@@ -159,7 +201,6 @@ def show(body):
 
 def load(url):
     content = url.request()
-    # If view-source is set, output raw HTML; otherwise, strip tags
     if getattr(url, "view_source", False):
         print(content, end="")
     else:
