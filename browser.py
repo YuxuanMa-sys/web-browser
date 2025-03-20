@@ -8,6 +8,7 @@ import tkinter
 
 WIDTH, HEIGHT = 800, 600
 SCROLL_STEP = 100
+HSTEP, VSTEP = 13, 18  # Used by layout and drawing functions
 
 # Global connection pool for persistent connections
 connection_pool = {}
@@ -145,11 +146,9 @@ class URL:
             return URL(new_url).request(redirects_remaining - 1)
 
         # Read the response body.
-        # If Transfer-Encoding is chunked, use a chunked reader.
         if response_headers.get("transfer-encoding", "").lower() == "chunked":
             body_bytes = b""
             while True:
-                # Read the chunk size line.
                 chunk_size_line = response.readline()
                 if not chunk_size_line:
                     break
@@ -159,29 +158,23 @@ class URL:
                 except ValueError:
                     raise Exception(f"Invalid chunk size: {chunk_size_str}")
                 if chunk_size == 0:
-                    # Read and discard any trailing header lines and final CRLF.
                     response.readline()
                     break
                 chunk = response.read(chunk_size)
                 body_bytes += chunk
-                # Read the trailing CRLF after each chunk.
                 response.read(2)
         elif "content-length" in response_headers:
             length = int(response_headers["content-length"])
             body_bytes = response.read(length)
         else:
-            # No Content-Length or chunked Transfer-Encoding.
-            # Read until EOF.
             body_bytes = response.read()
 
-        # If the response is gzip-compressed, decompress it.
         if response_headers.get("content-encoding", "").lower() == "gzip":
             try:
                 body_bytes = gzip.decompress(body_bytes)
             except Exception as e:
                 raise Exception(f"Failed to decompress gzip data: {e}")
 
-        # Decode the body bytes into a string.
         content = body_bytes.decode("utf-8", errors="replace")
 
         # --- Caching logic ---
@@ -210,10 +203,7 @@ class URL:
                 response_cache[canonical_url] = (content, expire_time_val)
                 print("Caching response for", canonical_url)
 
-        # Do not close the socket (keep-alive).
         return content
-
-
 
 class Browser:
     def __init__(self):
@@ -221,12 +211,20 @@ class Browser:
         self.window = tkinter.Tk()
         self.canvas = tkinter.Canvas(
             self.window,
-            width = WIDTH,
-            height = HEIGHT
+            width=WIDTH,
+            height=HEIGHT
         )
         self.canvas.pack()
         self.scroll = 0
+
+        # Bind keyboard scrolling events.
         self.window.bind("<KeyPress-Down>", self.scrolldown)
+        self.window.bind("<KeyPress-Up>", self.scrollup)
+
+        # Bind mouse wheel events.
+        self.window.bind("<MouseWheel>", self.on_mousewheel)  # Windows/macOS
+        self.window.bind("<Button-4>", self.on_mousewheel_up)   # Linux scroll up
+        self.window.bind("<Button-5>", self.on_mousewheel_down) # Linux scroll down
 
     def load(self, url):
         content = url.request()
@@ -240,23 +238,42 @@ class Browser:
     def draw(self):
         self.canvas.delete("all")
         for x, y, c in self.display_list:
-            if y > self.scroll + HEIGHT: continue
-            if y + VSTEP < self.scroll: continue
+            # Only draw text within the visible area.
+            if y - self.scroll > HEIGHT or y - self.scroll < 0:
+                continue
             self.canvas.create_text(x, y - self.scroll, text=c)
-
-        # self.canvas.create_rectangle(10, 20, 400, 300)
-        # self.canvas.create_oval(100, 100, 150, 150)
-        # self.canvas.create_text(200, 150, text = 'Hi')
-
 
     def scrolldown(self, event):
         self.scroll += SCROLL_STEP
         self.draw()
 
+    def scrollup(self, event):
+        self.scroll -= SCROLL_STEP
+        if self.scroll < 0:
+            self.scroll = 0
+        self.draw()
+
+    def on_mousewheel(self, event):
+        # Windows/macOS: event.delta is typically a multiple of 120.
+        # Invert delta so that positive values scroll up.
+        scroll_amount = - (event.delta / 120) * SCROLL_STEP
+        self.scroll += scroll_amount
+        if self.scroll < 0:
+            self.scroll = 0
+        self.draw()
+
+    def on_mousewheel_up(self, event):
+        self.scroll -= SCROLL_STEP
+        if self.scroll < 0:
+            self.scroll = 0
+        self.draw()
+
+    def on_mousewheel_down(self, event):
+        self.scroll += SCROLL_STEP
+        self.draw()
 
 def lex(body):
     text = ""
-    # Remove HTML tags and decode &lt; and &gt; entities.
     result = []
     in_tag = False
     i = 0
@@ -279,14 +296,11 @@ def lex(body):
     print(html_text, end="")
     return text
 
-HSTEP, VSTEP = 13, 18
-
 def layout(text):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     for c in text:
-        if c == '\n':
-            # Newline: end the current line and add extra vertical space
+        if c == "\n":
             cursor_x = HSTEP
             cursor_y += VSTEP * 2
         else:
@@ -296,16 +310,6 @@ def layout(text):
                 cursor_y += VSTEP
                 cursor_x = HSTEP
     return display_list
-
-
-# if __name__ == "__main__":
-#     import sys
-#     if len(sys.argv) < 2:
-#         default_file = os.path.abspath("test.html")
-#         url_str = "file://" + default_file
-#     else:
-#         url_str = sys.argv[1]
-#     load(URL(url_str))
 
 if __name__ == '__main__':
     import sys
