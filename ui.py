@@ -79,6 +79,8 @@ class Layout:
         self.cursor_x = HSTEP
         self.cursor_y = VSTEP
 
+        self.center_mode = False
+
         # Then loop over the tokens
         for tok in tokens:
             self.token(tok)
@@ -95,7 +97,13 @@ class Layout:
         else:
             # It's a Tag
             tag = tok.text.lower()
-            if tag == "b":
+            if tag.startswith("h1") and "class" in tag and "title" in tag:
+                self.flush()
+                self.center_mode = True
+            elif tag == "/h1":
+                self.flush()  # Flush the h1 content.
+                self.center_mode = False
+            elif tag == "b":
                 self.weight = "bold"
             elif tag == "/b":
                 self.weight = "normal"
@@ -142,6 +150,13 @@ class Layout:
     def flush(self):
         if not self.line:
             return
+
+        if self.center_mode:
+            # Compute total width: maximum (x + word width) among tokens.
+            total_width = max(x + font.measure(word) for (x, word, font) in self.line) - HSTEP
+            offset = (self.width - total_width) // 2
+            # Adjust x coordinates of all tokens.
+            self.line = [(x + offset, word, font) for (x, word, font) in self.line]
         # First pass: compute metrics for all words in this line.
         metrics = [font.metrics() for (x, word, font) in self.line]
         max_ascent = max(m["ascent"] for m in metrics)
