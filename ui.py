@@ -14,6 +14,19 @@ VSTEP = 18
 WeightType = Literal["normal", "bold"]
 StyleType = Literal["roman", "italic"]
 
+
+FONTS = {}
+
+def get_font(size, weight, style):
+    key = (size, weight, style)
+    if key not in FONTS:
+        # Create the font
+        font = tkinter.font.Font(size=size, weight=weight, slant=style)
+        # Create a label so that measuring is cached more effectively
+        label = tkinter.Label(font=font)
+        FONTS[key] = (font, label)
+    return FONTS[key][0]
+
 # Text and Tag classes for tokenizing the HTML content.
 class Text:
     def __init__(self, text):
@@ -99,19 +112,18 @@ class Layout:
             elif tag == "/big":
                 self.size -= 4
             elif tag == "br":
-                # line break
-                self.cursor_x = HSTEP
+                self.flush()  # finish current line
                 self.cursor_y += self.line_height()
+
             elif tag == "p":
-                # paragraph break
-                self.cursor_x = HSTEP
+                self.flush()  # finish current line
                 self.cursor_y += 2 * self.line_height()
-            # ignore other tags
+
+        # ignore other tags
 
     def word(self, word):
         # Create a font with the current styling.
-        current_font = tkinter.font.Font(family="Times", size=self.size,
-                                         weight=self.weight, slant=self.style)
+        current_font = get_font(self.size, self.weight, self.style)
         w = current_font.measure(word)
         # If the word doesn't fit, flush the current line.
         if self.cursor_x + w > self.width - HSTEP:
