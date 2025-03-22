@@ -18,10 +18,9 @@ def get_emoji_image(ch):
     """
     Given a character, if an emoji image exists for it in the 'emoji' folder,
     load it using Tk's PhotoImage and cache it.
-    Only single characters are considered for emoji rendering.
+    Only single-character strings are considered for emoji rendering.
     The filename is based on the Unicode codepoint in uppercase (e.g., "1F600.png").
     """
-    # Only single-character strings can be an emoji.
     if len(ch) != 1:
         return None
     global emoji_images

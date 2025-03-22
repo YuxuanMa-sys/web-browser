@@ -11,59 +11,102 @@ SCROLL_STEP = 100
 HSTEP = 13
 VSTEP = 18
 
+# Text and Tag classes for tokenizing the HTML content.
+class Text:
+    def __init__(self, text):
+        self.text = text
+
+class Tag:
+    def __init__(self, tag):
+        self.text = tag
 
 def lex(body):
-    text = ""
-    result = []
+    """
+    Lexical analyzer that returns a list of tokens (Text or Tag objects).
+    Unfinished tags are dropped.
+    """
+    tokens = []
+    buffer = ""
     in_tag = False
-    i = 0
-    while i < len(body):
-        c = body[i]
+    for c in body:
         if c == "<":
+            if buffer:
+                tokens.append(Text(buffer))
+                buffer = ""
             in_tag = True
-            i += 1
-            continue
         elif c == ">":
-            in_tag = False
-            i += 1
-            continue
-        if not in_tag:
-            result.append(c)
-            text += c
-        i += 1
-    html_text = "".join(result)
-    html_text = html_text.replace("&lt;", "<").replace("&gt;", ">")
-    print(html_text, end="")
-    return text
-
-def layout(text, width):
-    font = tkinter.font.Font()
-    display_list = []
-    cursor_x, cursor_y = HSTEP, VSTEP
-    for c in text.split():
-        w = font.measure(c)
-        # print(c, w)
-        if c == "\n":
-            cursor_x = HSTEP
-            cursor_y += VSTEP * 2
+            if in_tag:
+                tokens.append(Tag(buffer.strip()))
+                buffer = ""
+                in_tag = False
         else:
-            # Check if the character is an emoji (if an image exists for it).
-            img = get_emoji_image(c)
-            if img is not None:
-                display_list.append((cursor_x, cursor_y, c, True))
-            else:
-                display_list.append((cursor_x, cursor_y, c, False))
-                cursor_x += w + font.measure(" ")
-            cursor_x += HSTEP
-            if cursor_x + w >= width - HSTEP:
-                cursor_y += font.metrics("linespace") * 1.25
+            buffer += c
+    if buffer:
+        tokens.append(Text(buffer))
+    return tokens
+
+def layout(tokens, width):
+    """
+    Word-by-word layout with basic text styling:
+    - Processes tokens from lex().
+    - For Text tokens, splits text into words on whitespace.
+    - Measures each word using tkinter.font.Font() with current style.
+    - Wraps to a new line if a word doesn't fit in the remaining space.
+    - Inserts a space (measured via font.measure(" ")) between words.
+    - Processes Tag tokens to adjust styling: supports <b>, </b>, <i>, </i>, <br>, and <p>.
+    Returns a list of display tokens: (x, y, word, font, is_emoji).
+    """
+    display_list = []
+    weight = "normal"
+    style = "roman"
+    size = 16
+    cursor_x = HSTEP
+    cursor_y = VSTEP
+    for tok in tokens:
+        if isinstance(tok, Tag):
+            tag_text = tok.text.lower()
+            if tag_text == "b":
+                weight = "bold"
+            elif tag_text == "/b":
+                weight = "normal"
+            elif tag_text == "i":
+                style = "italic"
+            elif tag_text == "/i":
+                style = "roman"
+            elif tag_text == "br":
                 cursor_x = HSTEP
+                cursor_y += math.ceil(tkinter.font.Font(size=size).metrics("linespace") * 1.25)
+            elif tag_text == "p":
+                cursor_x = HSTEP
+                cursor_y += math.ceil(tkinter.font.Font(size=size).metrics("linespace") * 1.25) * 2
+            # Ignore other tags.
+        elif isinstance(tok, Text):
+            words = tok.text.split()
+            for idx, word in enumerate(words):
+                current_font = tkinter.font.Font(family="Times", size=size, weight=weight, slant=style)
+                w = current_font.measure(word)
+                if cursor_x + w > width - HSTEP:
+                    cursor_x = HSTEP
+                    cursor_y += math.ceil(current_font.metrics("linespace") * 1.25)
+                is_emoji = (len(word) == 1 and get_emoji_image(word) is not None)
+                display_list.append((cursor_x, cursor_y, word, current_font, is_emoji))
+                cursor_x += w
+                if idx != len(words) - 1:
+                    space_w = current_font.measure(" ")
+                    if cursor_x + space_w > width - HSTEP:
+                        cursor_x = HSTEP
+                        cursor_y += math.ceil(current_font.metrics("linespace") * 1.25)
+                    else:
+                        cursor_x += space_w
+            # After processing a text token, force a newline.
+            cursor_x = HSTEP
+            cursor_y += math.ceil(tkinter.font.Font(size=size).metrics("linespace") * 1.25)
     return display_list
 
 class Browser:
     def __init__(self):
         self.display_list = None
-        self.raw_text = ""
+        self.raw_tokens = []  # Store tokens for re-layout on resize.
         self.window = tkinter.Tk()
         self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
         self.canvas.pack(fill="both", expand=True)
@@ -79,18 +122,17 @@ class Browser:
     def load(self, url):
         content = url.request()
         if getattr(url, "view_source", False):
-            # print(1)
             print(content, end="")
         else:
-            text = lex(content)
-            self.raw_text = text  # Store raw text for re-layout on resize.
-            self.display_list = layout(text, self.canvas.winfo_width())
+            tokens = lex(content)
+            self.raw_tokens = tokens  # Store tokens for re-layout.
+            self.display_list = layout(tokens, self.canvas.winfo_width())
             self.draw()
 
     def draw(self):
         self.canvas.delete("all")
         for token in self.display_list:
-            x, y, txt, is_emoji = token
+            x, y, txt, fnt, is_emoji = token
             if y - self.scroll > self.canvas.winfo_height() or y - self.scroll < 0:
                 continue
             if is_emoji:
@@ -98,9 +140,9 @@ class Browser:
                 if img is not None:
                     self.canvas.create_image(x, y - self.scroll, image=img, anchor="nw")
             else:
-                self.canvas.create_text(x, y - self.scroll, text=txt, anchor="nw")
+                self.canvas.create_text(x, y - self.scroll, text=txt, anchor="nw", font=fnt)
         visible_height = self.canvas.winfo_height()
-        max_y = max((y for (x, y, txt, is_emoji) in self.display_list), default=0)
+        max_y = max((y for (x, y, txt, fnt, is_emoji) in self.display_list), default=0)
         max_scroll = max(0, max_y - visible_height)
         if self.scroll > max_scroll:
             self.scroll = max_scroll
@@ -144,6 +186,6 @@ class Browser:
 
     def on_configure(self, event):
         new_width = event.width
-        if self.raw_text:
-            self.display_list = layout(self.raw_text, new_width)
+        if self.raw_tokens:
+            self.display_list = layout(self.raw_tokens, new_width)
             self.draw()
