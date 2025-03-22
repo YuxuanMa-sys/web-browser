@@ -1,7 +1,7 @@
 # main.py
 import sys
 from url import URL
-from ui import Browser
+from browser import Browser
 import tkinter
 
 if __name__ == '__main__':
