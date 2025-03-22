@@ -3,6 +3,7 @@ import tkinter
 import tkinter.font
 import math
 from url import get_emoji_image
+from typing import Literal
 
 # Global constants.
 WIDTH = 800
@@ -10,6 +11,9 @@ HEIGHT = 600
 SCROLL_STEP = 100
 HSTEP = 13
 VSTEP = 18
+
+WeightType = Literal["normal", "bold"]
+StyleType = Literal["roman", "italic"]
 
 # Text and Tag classes for tokenizing the HTML content.
 class Text:
@@ -45,63 +49,97 @@ def lex(body):
         tokens.append(Text(buffer))
     return tokens
 
-def layout(tokens, width):
-    """
-    Word-by-word layout with basic text styling:
-    - Processes tokens from lex().
-    - For Text tokens, splits text into words on whitespace.
-    - Measures each word using tkinter.font.Font() with current style.
-    - Wraps to a new line if a word doesn't fit in the remaining space.
-    - Inserts a space (measured via font.measure(" ")) between words.
-    - Processes Tag tokens to adjust styling: supports <b>, </b>, <i>, </i>, <br>, and <p>.
-    Returns a list of display tokens: (x, y, word, font, is_emoji).
-    """
-    display_list = []
-    weight = "normal"
-    style = "roman"
-    size = 16
-    cursor_x = HSTEP
-    cursor_y = VSTEP
-    for tok in tokens:
-        if isinstance(tok, Tag):
-            tag_text = tok.text.lower()
-            if tag_text == "b":
-                weight = "bold"
-            elif tag_text == "/b":
-                weight = "normal"
-            elif tag_text == "i":
-                style = "italic"
-            elif tag_text == "/i":
-                style = "roman"
-            elif tag_text == "br":
-                cursor_x = HSTEP
-                cursor_y += math.ceil(tkinter.font.Font(size=size).metrics("linespace") * 1.25)
-            elif tag_text == "p":
-                cursor_x = HSTEP
-                cursor_y += math.ceil(tkinter.font.Font(size=size).metrics("linespace") * 1.25) * 2
-            # Ignore other tags.
-        elif isinstance(tok, Text):
-            words = tok.text.split()
-            for idx, word in enumerate(words):
-                current_font = tkinter.font.Font(family="Times", size=size, weight=weight, slant=style)
-                w = current_font.measure(word)
-                if cursor_x + w > width - HSTEP:
-                    cursor_x = HSTEP
-                    cursor_y += math.ceil(current_font.metrics("linespace") * 1.25)
-                is_emoji = (len(word) == 1 and get_emoji_image(word) is not None)
-                display_list.append((cursor_x, cursor_y, word, current_font, is_emoji))
-                cursor_x += w
-                if idx != len(words) - 1:
-                    space_w = current_font.measure(" ")
-                    if cursor_x + space_w > width - HSTEP:
-                        cursor_x = HSTEP
-                        cursor_y += math.ceil(current_font.metrics("linespace") * 1.25)
-                    else:
-                        cursor_x += space_w
-            # After processing a text token, force a newline.
-            cursor_x = HSTEP
-            cursor_y += math.ceil(tkinter.font.Font(size=size).metrics("linespace") * 1.25)
-    return display_list
+
+class Layout:
+    def __init__(self, tokens, width):
+        # Initialize fields
+        self.tokens = tokens
+        self.width = width
+        self.display_list = []
+
+        # Font styling state
+        self.weight: WeightType = "normal"
+        self.style: StyleType = "roman"
+        self.size = 12
+
+        # Cursor state
+        self.cursor_x = HSTEP
+        self.cursor_y = VSTEP
+
+        # Then loop over the tokens
+        for tok in tokens:
+            self.token(tok)
+
+    def token(self, tok):
+        if isinstance(tok, Text):
+            # For each word in the text
+            for word in tok.text.split():
+                self.word(word)
+            # Maybe a line break after each text token
+            self.cursor_x = HSTEP
+            self.cursor_y += self.line_height()
+        else:
+            # It's a Tag
+            tag = tok.text.lower()
+            if tag == "b":
+                self.weight = "bold"
+            elif tag == "/b":
+                self.weight = "normal"
+            elif tag == "i":
+                self.style = "italic"
+            elif tag == "/i":
+                self.style = "roman"
+            elif tag == "small":
+                self.size -= 2
+            elif tag == "/small":
+                self.size += 2
+            elif tag == "big":
+                self.size += 4
+            elif tag == "/big":
+                self.size -= 4
+            elif tag == "br":
+                # line break
+                self.cursor_x = HSTEP
+                self.cursor_y += self.line_height()
+            elif tag == "p":
+                # paragraph break
+                self.cursor_x = HSTEP
+                self.cursor_y += 2 * self.line_height()
+            # ignore other tags
+
+    def word(self, text):
+        # Create a font with the current styling
+        font = tkinter.font.Font(
+            family="Times",
+            size=self.size,
+            weight=self.weight,
+            slant=self.style,
+        )
+
+        w = font.measure(text)
+        # Check if it fits
+        if self.cursor_x + w > self.width - HSTEP:
+            self.cursor_x = HSTEP
+            self.cursor_y += self.line_height()
+
+        # Check if it's a single-character emoji
+        is_emoji = (len(text) == 1 and get_emoji_image(text) is not None)
+
+        # Add to the display list
+        self.display_list.append((self.cursor_x, self.cursor_y, text, font, is_emoji))
+
+        # Advance
+        self.cursor_x += w
+        # Optionally add a space if not the last word in the text token
+        space_w = font.measure(" ")
+        if self.cursor_x + space_w <= self.width - HSTEP:
+            self.cursor_x += space_w
+
+    def line_height(self):
+        # We can compute a "temporary" font or store one
+        tmp_font = tkinter.font.Font(size=self.size, weight=self.weight, slant=self.style)
+        return math.ceil(tmp_font.metrics("linespace") * 1.25)
+
 
 class Browser:
     def __init__(self):
@@ -126,18 +164,18 @@ class Browser:
         else:
             tokens = lex(content)
             self.raw_tokens = tokens  # Store tokens for re-layout.
-            self.display_list = layout(tokens, self.canvas.winfo_width())
+            layout_obj = Layout(tokens, self.canvas.winfo_width())
+            self.display_list = layout_obj.display_list
             self.draw()
 
     def draw(self):
         self.canvas.delete("all")
-        for token in self.display_list:
-            x, y, txt, fnt, is_emoji = token
+        for x, y, txt, fnt, is_emoji in self.display_list:
             if y - self.scroll > self.canvas.winfo_height() or y - self.scroll < 0:
                 continue
             if is_emoji:
                 img = get_emoji_image(txt)
-                if img is not None:
+                if img:
                     self.canvas.create_image(x, y - self.scroll, image=img, anchor="nw")
             else:
                 self.canvas.create_text(x, y - self.scroll, text=txt, anchor="nw", font=fnt)
@@ -187,5 +225,6 @@ class Browser:
     def on_configure(self, event):
         new_width = event.width
         if self.raw_tokens:
-            self.display_list = layout(self.raw_tokens, new_width)
+            layout_obj = Layout(self.raw_tokens, new_width)
+            self.display_list = layout_obj.display_list
             self.draw()
