@@ -1,0 +1,1 @@
+testing with local file: file://$(pwd)/test.html  (this will generate valid absolute file path on macos)
