@@ -1,56 +1,49 @@
+# browser.py
 import tkinter
 import tkinter.font
-from ui import Layout, lex
-from url import  get_emoji_image
-
-
-WIDTH = 800
-HEIGHT = 600
-SCROLL_STEP = 100
-HSTEP = 13
-VSTEP = 18
-
+from layout import WIDTH, HEIGHT, SCROLL_STEP
+from html_parser import HTMLParser
+from layout import Layout
 
 class Browser:
     def __init__(self):
         self.display_list = None
-        self.raw_tokens = []  # Store tokens for re-layout on resize.
+        self.nodes = None  # Will hold the root node of the parsed HTML tree.
         self.window = tkinter.Tk()
         self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
         self.canvas.pack(fill="both", expand=True)
         self.scroll = 0
-        self.font = tkinter.font.Font(family="Times", size=16)
+
         self.window.bind("<KeyPress-Down>", self.scrolldown)
         self.window.bind("<KeyPress-Up>", self.scrollup)
-        self.window.bind("<MouseWheel>", self.on_mousewheel)  # Windows/macOS
-        self.window.bind("<Button-4>", self.on_mousewheel_up)   # Linux scroll up
-        self.window.bind("<Button-5>", self.on_mousewheel_down) # Linux scroll down
+        self.window.bind("<MouseWheel>", self.on_mousewheel)
+        self.window.bind("<Button-4>", self.on_mousewheel_up)
+        self.window.bind("<Button-5>", self.on_mousewheel_down)
         self.canvas.bind("<Configure>", self.on_configure)
 
     def load(self, url):
-        content = url.request()
-        if getattr(url, "view_source", False):
-            print(content, end="")
-        else:
-            tokens = lex(content)
-            self.raw_tokens = tokens  # Store tokens for re-layout.
-            layout_obj = Layout(tokens, self.canvas.winfo_width())
-            self.display_list = layout_obj.display_list
-            self.draw()
+        body = url.request()
+        # Build the HTML node tree using our parser.
+        self.nodes = HTMLParser(body).parse()
+        # Create the layout using the node tree.
+        self.display_list = Layout(self.nodes, self.canvas.winfo_width()).display_list
+        self.draw()
 
     def draw(self):
         self.canvas.delete("all")
-        for x, y, txt, fnt, is_emoji in self.display_list:
+        for x, y, txt, font, is_emoji in self.display_list:
             if y - self.scroll > self.canvas.winfo_height() or y - self.scroll < 0:
                 continue
             if is_emoji:
-                img = get_emoji_image(txt)
-                if img:
-                    self.canvas.create_image(x, y - self.scroll, image=img, anchor="nw")
+                # If emojis were supported, draw them appropriately.
+                # self.canvas.create_image(x, y - self.scroll, image=img, anchor="nw")
+                return
             else:
-                self.canvas.create_text(x, y - self.scroll, text=txt, anchor="nw", font=fnt)
+                self.canvas.create_text(x, y - self.scroll, text=txt, anchor="nw", font=font)
+
+        # (Optional) Draw a scrollbar if needed...
         visible_height = self.canvas.winfo_height()
-        max_y = max((y for (x, y, txt, fnt, is_emoji) in self.display_list), default=0)
+        max_y = max((y for (x, y, txt, font, is_emoji) in self.display_list), default=0)
         max_scroll = max(0, max_y - visible_height)
         if self.scroll > max_scroll:
             self.scroll = max_scroll
@@ -94,7 +87,6 @@ class Browser:
 
     def on_configure(self, event):
         new_width = event.width
-        if self.raw_tokens:
-            layout_obj = Layout(self.raw_tokens, new_width)
-            self.display_list = layout_obj.display_list
+        if self.nodes:
+            self.display_list = Layout(self.nodes, new_width).display_list
             self.draw()

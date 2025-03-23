@@ -1,4 +1,4 @@
-# ui.py
+# layout.py
 import tkinter
 import tkinter.font
 import math
@@ -62,17 +62,15 @@ def lex(body):
     return tokens
 
 
+
 class Layout:
-    def __init__(self, tokens, width):
-        # Initialize fields
-        self.tokens = tokens
-        self.width = width
-        self.display_list = []
-        self.line = []
+    def __init__(self, root, width=WIDTH):
+        self.display_list = []  # List of tuples: (x, y, text, font, is_emoji)
+        self.line = []  # Current line buffer
 
         # Font styling state
-        self.weight: WeightType = "normal"
-        self.style: StyleType = "roman"
+        self.weight = "normal"
+        self.style = "roman"
         self.size = 12
 
         # Cursor state
@@ -80,67 +78,67 @@ class Layout:
         self.cursor_y = VSTEP
 
         self.center_mode = False
+        self.width = width
 
-        # Then loop over the tokens
-        for tok in tokens:
-            self.token(tok)
-
+        # Recursively walk the node tree
+        self.recurse(root)
         self.flush()
 
-    def token(self, tok):
-        if isinstance(tok, Text):
-            # For each word in the text
-            for word in tok.text.split():
+    def open_tag(self, tag):
+        # Example handling for some tags:
+        if tag == "i":
+            self.style = "italic"
+        elif tag == "b":
+            self.weight = "bold"
+        elif tag == "small":
+            self.size -= 2
+        elif tag == "big":
+            self.size += 4
+        elif tag.startswith("h1"):
+            self.flush()          # Flush current line before heading changes layout
+            self.center_mode = True
+        # ... add additional tag handling as needed
+
+    def close_tag(self, tag):
+        if tag == "i":
+            self.style = "roman"
+        elif tag == "b":
+            self.weight = "normal"
+        elif tag == "small":
+            self.size += 2
+        elif tag == "big":
+            self.size -= 4
+        elif tag.startswith("h1"):
+            self.flush()
+            self.center_mode = False
+        # ... add additional tag handling as needed
+
+    def recurse(self, node):
+        # We assume that text nodes are instances of Text (from html_parser) and
+        # element nodes are instances of Element.
+        from html_parser import Text  # Importing our node classes.
+        if isinstance(node, Text):
+            # Process text node: split text into words and layout each word.
+            for word in node.text.split():
                 self.word(word)
-
-
         else:
-            # It's a Tag
-            tag = tok.text.lower()
-            if tag.startswith("h1") and "class" in tag and "title" in tag:
-                self.flush()
-                self.center_mode = True
-            elif tag == "/h1":
-                self.flush()  # Flush the h1 content.
-                self.center_mode = False
-            elif tag == "b":
-                self.weight = "bold"
-            elif tag == "/b":
-                self.weight = "normal"
-            elif tag == "i":
-                self.style = "italic"
-            elif tag == "/i":
-                self.style = "roman"
-            elif tag == "small":
-                self.size -= 2
-            elif tag == "/small":
-                self.size += 2
-            elif tag == "big":
-                self.size += 4
-            elif tag == "/big":
-                self.size -= 4
-            elif tag == "br":
-                self.flush()  # finish current line
-                self.cursor_y += self.line_height()
-
-            elif tag == "p":
-                self.flush()  # finish current line
-                self.cursor_y += 2 * self.line_height()
-
-        # ignore other tags
+            # For element nodes, treat the tag as an open tag,
+            # then recurse into its children, then call the close_tag.
+            self.open_tag(node.tag)
+            for child in node.children:
+                self.recurse(child)
+            self.close_tag(node.tag)
 
     def word(self, word):
-        # Create a font with the current styling.
         current_font = get_font(self.size, self.weight, self.style)
         w = current_font.measure(word)
-        # If the word doesn't fit, flush the current line.
+        # If the word doesn't fit in the current line, flush the line.
         if self.cursor_x + w > self.width - HSTEP:
             self.flush()
-        # Append the word to the line buffer. (No y position computed yet.)
+        # Append the word along with its x-coordinate and font.
         self.line.append((self.cursor_x, word, current_font))
-        # Advance cursor_x by word width.
         self.cursor_x += w
-        # Add space after word.
+        # Measure a space and add it.
         space_w = current_font.measure(" ")
         if self.cursor_x + space_w > self.width - HSTEP:
             self.flush()
@@ -151,35 +149,24 @@ class Layout:
         if not self.line:
             return
 
+        # If center mode is enabled, adjust each word's x-coordinate.
         if self.center_mode:
-            # Compute total width: maximum (x + word width) among tokens.
             total_width = max(x + font.measure(word) for (x, word, font) in self.line) - HSTEP
             offset = (self.width - total_width) // 2
-            # Adjust x coordinates of all tokens.
             self.line = [(x + offset, word, font) for (x, word, font) in self.line]
-        # First pass: compute metrics for all words in this line.
+
+        # First pass: compute metrics for all words.
         metrics = [font.metrics() for (x, word, font) in self.line]
         max_ascent = max(m["ascent"] for m in metrics)
         max_descent = max(m["descent"] for m in metrics)
-        # Compute baseline: current cursor_y plus 1.25×max_ascent.
+        # Compute baseline position.
         baseline = self.cursor_y + int(1.25 * max_ascent)
-        # Second pass: assign y positions so that each word's top is (baseline - its ascent).
+        # Second pass: assign y positions.
         for (x, word, font) in self.line:
             y = baseline - font.metrics("ascent")
-            # Here we add the token to the display list.
-            # For simplicity, we mark is_emoji as False.
             self.display_list.append((x, y, word, font, False))
-        # Update cursor_y: move down by baseline plus 1.25×max_descent.
+        # Update cursor_y to move to the next line.
         self.cursor_y = baseline + int(1.25 * max_descent)
-        # Reset horizontal position and clear the line buffer.
+        # Reset horizontal cursor and clear the line buffer.
         self.cursor_x = HSTEP
         self.line = []
-
-
-
-    def line_height(self):
-        # We can compute a "temporary" font or store one
-        tmp_font = tkinter.font.Font(size=self.size, weight=self.weight, slant=self.style)
-        return math.ceil(tmp_font.metrics("linespace") * 1.25)
-
-

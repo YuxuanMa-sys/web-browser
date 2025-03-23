@@ -1,11 +1,10 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>Test Page</title>
-  </head>
-  <body>
-    <p>This is a paragraph with <b>bold</b> and <i>italic</i> text.</p>
-    <p>Another paragraph.</p>
-  </body>
-</html>
+example_html = """
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Test Page</title>
+<style>
+  body { background-color: #eee; }
+</style>
+<p>Hello, this is a test page with implicit tags.</p>
+<p>It should automatically insert missing <code>&lt;html&gt;</code>, <code>&lt;head&gt;</code>, and <code>&lt;body&gt;</code> tags.</p>
+"""
