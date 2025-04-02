@@ -93,6 +93,8 @@ class HTMLParser:
         # We handle it the same way by parsing it.
         tag, attributes = self.get_attributes(text)
         # Ignore tags starting with "!" (doctypes, comments, etc.)
+        # This specifically handles cases like <!DOCTYPE html> and any <!-- comments -->
+        # that might slip through the lexer/parser
         if tag.startswith("!"):
             return
         self.implicit_tags(tag)
@@ -128,7 +130,35 @@ class HTMLParser:
     def parse(self):
         text = ""
         in_tag = False
-        for c in self.body:
+        in_comment = False
+        
+        i = 0
+        while i < len(self.body):
+            c = self.body[i]
+            
+            # Check for comment start
+            if not in_comment and c == '<' and i + 3 < len(self.body) and self.body[i:i+4] == '<!--':
+                # We're entering a comment
+                if text and not in_tag:
+                    self.add_text(text)
+                    text = ""
+                in_comment = True
+                i += 4  # Skip over <!--
+                continue
+                
+            # Check for comment end
+            if in_comment and i + 2 < len(self.body) and self.body[i:i+3] == '-->':
+                # We're leaving a comment
+                in_comment = False
+                i += 3  # Skip over -->
+                continue
+                
+            # Skip characters while in comment
+            if in_comment:
+                i += 1
+                continue
+            
+            # Regular HTML parsing logic (mostly unchanged)
             if c == "<":
                 in_tag = True
                 if text:
@@ -140,7 +170,9 @@ class HTMLParser:
                 text = ""
             else:
                 text += c
-        if not in_tag and text:
+            i += 1
+                
+        if not in_tag and not in_comment and text:
             self.add_text(text)
         return self.finish()
 

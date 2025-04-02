@@ -40,11 +40,41 @@ def lex(body):
     """
     Lexical analyzer that returns a list of tokens (Text or Tag objects).
     Unfinished tags are dropped.
+    Comments (<!-- ... -->) are skipped entirely.
     """
     tokens = []
     buffer = ""
     in_tag = False
-    for c in body:
+    in_comment = False
+    comment_buffer = ""
+    
+    i = 0
+    while i < len(body):
+        c = body[i]
+        
+        # Check for comment start sequence
+        if not in_comment and c == '<' and i + 3 < len(body) and body[i:i+4] == '<!--':
+            # We're entering a comment
+            if buffer:
+                tokens.append(Text(buffer))
+                buffer = ""
+            in_comment = True
+            i += 4  # Skip over <!--
+            continue
+            
+        # Check for comment end sequence
+        if in_comment and i + 2 < len(body) and body[i:i+3] == '-->':
+            # We're leaving a comment
+            in_comment = False
+            i += 3  # Skip over -->
+            continue
+            
+        # Skip characters while in comment
+        if in_comment:
+            i += 1
+            continue
+
+        # Normal token handling (unchanged from original implementation)
         if c == "<":
             if buffer:
                 tokens.append(Text(buffer))
@@ -57,7 +87,9 @@ def lex(body):
                 in_tag = False
         else:
             buffer += c
-    if buffer:
+        i += 1
+            
+    if buffer and not in_comment:
         tokens.append(Text(buffer))
     return tokens
 

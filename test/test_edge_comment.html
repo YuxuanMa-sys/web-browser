@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>HTML Comment Edge Case Test</title>
+</head>
+<body>
+    <h1>Testing the <!--> Edge Case</h1>
+    
+    <p>According to the HTML spec, <!--> is not a complete comment. The --> isn't preceded by enough characters to form a valid comment opening.</p>
+    
+    <p>Text<!--> This should test our handling of this edge case.</p>
+    
+    <p>This text should appear after the edge case test.</p>
+    
+    <p>Text1<!--> -->Text2</p>
+    
+    <p>Text3<!-->Text4</p>
+    
+    <p>End of test document</p>
+</body>
+</html> 

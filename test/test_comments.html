@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>HTML Comment Test</title>
+</head>
+<body>
+    <h1>Testing HTML Comments</h1>
+    
+    <!-- This is a basic comment -->
+    <p>This text should appear, but the comment above should not.</p>
+    
+    <!-- This comment contains <tags> and </tags> -->
+    <p>This text should appear, but comments with tags should be hidden.</p>
+    
+    <!-- This comment
+    spans multiple
+    lines -->
+    <p>This text should appear after a multi-line comment.</p>
+    
+    <!--> This is not a valid comment according to the HTML spec, but browsers handle it differently. 
+    In proper HTML5, this is parsed as a comment followed by a greater-than character -->
+    <p>This text should appear, and we should see how our browser handles the unusual comment above.</p>
+    
+    <!-- -> This comment ends with an arrow -->
+    <p>This text should appear after a comment ending with an arrow.</p>
+    
+    <!----> <!-- Empty comment -->
+    <p>This text should appear after an empty comment.</p>
+    
+    <p>End of test document <!-- Comment at the end --></p>
+</body>
+</html> 
