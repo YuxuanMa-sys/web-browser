@@ -113,10 +113,59 @@ class HTMLParser:
             parent = self.unfinished[-1]
             parent.children.append(node)
         else:
+            # Special handling for paragraphs and list items
+            # which shouldn't be nested directly within themselves
+            if tag in ["p", "li"]:
+                self.handle_special_nesting(tag)
+                
             # Handle opening tags.
             parent = self.unfinished[-1] if self.unfinished else None
             node = Element(tag, attributes, parent)
             self.unfinished.append(node)
+            
+    def handle_special_nesting(self, tag):
+        """
+        Handle special nesting rules for certain elements:
+        - <p> elements cannot contain other <p> elements
+        - <li> elements cannot be directly nested in other <li> elements
+          (except when they're part of a nested list)
+        """
+        # For each tag in the unfinished stack (from newest to oldest)
+        # Check if we need to auto-close anything
+        for i in range(len(self.unfinished) - 1, -1, -1):
+            if tag == "p" and self.unfinished[i].tag == "p":
+                # Close any open paragraph when starting a new paragraph
+                # This creates sibling paragraphs rather than nested ones
+                while self.unfinished[-1].tag != "p":
+                    node = self.unfinished.pop()
+                    parent = self.unfinished[-1]
+                    parent.children.append(node)
+                # Now close the paragraph itself
+                node = self.unfinished.pop()
+                parent = self.unfinished[-1]
+                parent.children.append(node)
+                break
+            
+            elif tag == "li" and self.unfinished[i].tag == "li":
+                # For list items, we need to check if there's a list (ul/ol) in between
+                # If not, close the current li
+                list_between = False
+                for j in range(len(self.unfinished) - 1, i, -1):
+                    if self.unfinished[j].tag in ["ul", "ol"]:
+                        list_between = True
+                        break
+                
+                if not list_between:
+                    # Close until we reach the li to close
+                    while self.unfinished[-1].tag != "li":
+                        node = self.unfinished.pop()
+                        parent = self.unfinished[-1]
+                        parent.children.append(node)
+                    # Now close the li
+                    node = self.unfinished.pop()
+                    parent = self.unfinished[-1]
+                    parent.children.append(node)
+                break
 
     def finish(self):
         if not self.unfinished:
