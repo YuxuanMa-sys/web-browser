@@ -42,6 +42,11 @@ class URL:
         self.about_blank = False
         self.view_source = False
         try:
+            # Check for view-source: prefix
+            if url.lower().startswith("view-source:"):
+                self.view_source = True
+                url = url[len("view-source:"):]
+                
             # If the URL is about:blank, mark it and return.
             if url.lower() == "about:blank":
                 self.about_blank = True
@@ -87,7 +92,11 @@ class URL:
             return ""
         # Delegate view-source requests.
         if self.view_source:
-            return self.inner.request(redirects_remaining)
+            # Get the original content
+            inner_url = URL(self.get_url_without_view_source())
+            content = inner_url.request(redirects_remaining)
+            # Return the syntax highlighted version
+            return self.highlight_html_source(content)
         if self.scheme == "data":
             return self.data
         if self.scheme == "file":
@@ -226,3 +235,113 @@ class URL:
                 response_cache[canonical_url] = (content, expire_time_val)
                 print("Caching response for", canonical_url)
         return content
+
+    def get_url_without_view_source(self):
+        """Return the URL string without the view-source: prefix"""
+        if self.about_blank:
+            return "about:blank"
+        if self.scheme == "data":
+            meta_data = ""  # You'd need to reconstruct the metadata part here
+            return f"data:{meta_data},{self.data}"
+        if self.scheme == "file":
+            return f"file://{self.path}"
+        # Reconstruct HTTP and HTTPS URLs
+        port_str = "" if (self.scheme == "http" and self.port == 80) or (self.scheme == "https" and self.port == 443) else f":{self.port}"
+        return f"{self.scheme}://{self.host}{port_str}{self.path}"
+        
+    def highlight_html_source(self, html_content):
+        """Syntax highlight HTML content"""
+        from html_parser import HTMLParser
+        
+        # Create a syntax highlighter that extends the HTML parser
+        class SyntaxHighlighter(HTMLParser):
+            def __init__(self, html):
+                super().__init__(html)
+                self.result = []
+                
+            def add_tag(self, text):
+                tag, attributes = self.get_attributes(text)
+                # Don't ignore DOCTYPE or comments in the view-source mode
+                if tag.startswith("!"):
+                    self.result.append(f"<span style='color:blue'>&lt;!{text[1:]}&gt;</span>")
+                    return
+                    
+                # Process tag with appropriate highlighting
+                if tag.startswith("/"):
+                    # Closing tag
+                    self.result.append(f"<span style='color:blue'>&lt;/{tag[1:]}&gt;</span>")
+                else:
+                    # Opening tag
+                    if attributes:
+                        attr_str = " ".join(f'{k}="{v}"' for k, v in attributes.items())
+                        self.result.append(f"<span style='color:blue'>&lt;{tag} {attr_str}&gt;</span>")
+                    else:
+                        self.result.append(f"<span style='color:blue'>&lt;{tag}&gt;</span>")
+                
+            def add_text(self, text):
+                if text.isspace():
+                    self.result.append(text)
+                else:
+                    # Make text content bold
+                    self.result.append(f"<span style='font-weight:bold'>{text}</span>")
+                
+            def parse(self):
+                # Override parse to just collect the highlighted elements
+                text = ""
+                in_tag = False
+                in_comment = False
+                
+                i = 0
+                while i < len(self.body):
+                    c = self.body[i]
+                    
+                    # Special handling for '<' and '>' to convert them to HTML entities
+                    # outside of our special spans
+                    if c == '<' and not in_tag and not in_comment:
+                        # Check for comment start
+                        if i + 3 < len(self.body) and self.body[i:i+4] == '<!--':
+                            if text:
+                                self.add_text(text)
+                                text = ""
+                            in_comment = True
+                            self.result.append("<span style='color:green'>&lt;!--")
+                            i += 4
+                            continue
+                        else:
+                            # Regular tag
+                            if text:
+                                self.add_text(text)
+                                text = ""
+                            in_tag = True
+                            text = ""
+                    elif c == '>' and in_tag:
+                        # Complete the tag
+                        self.add_tag(text)
+                        text = ""
+                        in_tag = False
+                    elif in_comment and i + 2 < len(self.body) and self.body[i:i+3] == '-->':
+                        # End of comment
+                        self.result.append("--&gt;</span>")
+                        in_comment = False
+                        i += 3
+                        continue
+                    else:
+                        # Accumulate text
+                        text += c
+                    i += 1
+                
+                # Handle any remaining text
+                if text:
+                    if in_tag:
+                        self.add_tag(text)
+                    elif in_comment:
+                        self.result.append(text + "</span>")
+                    else:
+                        self.add_text(text)
+                        
+                # Return the highlighted HTML wrapped in a pre tag to preserve formatting
+                return "<pre style='white-space:pre-wrap;font-family:monospace;'>" + "".join(self.result) + "</pre>"
+        
+        # Use our syntax highlighter
+        highlighter = SyntaxHighlighter(html_content)
+        return highlighter.parse()

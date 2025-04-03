@@ -33,10 +33,16 @@ class HTMLParser:
         "base", "basefont", "bgsound", "noscript",
         "link", "meta", "title", "style", "script",
     ]
+    # List of text formatting tags that can be mis-nested
+    FORMATTING_TAGS = {
+        "b", "i", "u", "em", "strong", "small", "big", "code", 
+        "strike", "s", "tt", "mark", "span", "font"
+    }
 
     def __init__(self, body):
         self.body = body
         self.unfinished = []  # Unfinished nodes (the current open elements).
+        self.formatting_elements = []  # Keep track of open formatting elements
 
     def get_attributes(self, text):
         parts = text.split()
@@ -107,11 +113,23 @@ class HTMLParser:
             return
         # Handle closing tags.
         if tag.startswith("/"):
-            if len(self.unfinished) == 1:
-                return
-            node = self.unfinished.pop()
-            parent = self.unfinished[-1]
-            parent.children.append(node)
+            tag_name = tag[1:]  # Remove the '/' prefix
+            
+            # Special handling for formatting tags that might be mis-nested
+            if tag_name in self.FORMATTING_TAGS and tag_name in [elem.tag for elem in self.formatting_elements]:
+                self.handle_mis_nested_formatting(tag_name)
+            else:
+                # Normal closing tag handling
+                if len(self.unfinished) == 1:
+                    return
+                node = self.unfinished.pop()
+                
+                # If this is a formatting tag being closed, remove it from formatting_elements
+                if node.tag in self.FORMATTING_TAGS:
+                    self.formatting_elements = [elem for elem in self.formatting_elements if elem != node]
+                    
+                parent = self.unfinished[-1]
+                parent.children.append(node)
         else:
             # Special handling for paragraphs and list items
             # which shouldn't be nested directly within themselves
@@ -122,6 +140,61 @@ class HTMLParser:
             parent = self.unfinished[-1] if self.unfinished else None
             node = Element(tag, attributes, parent)
             self.unfinished.append(node)
+            
+            # If this is a formatting tag, add it to formatting_elements
+            if tag in self.FORMATTING_TAGS:
+                self.formatting_elements.append(node)
+            
+    def handle_mis_nested_formatting(self, tag_name):
+        """
+        Handle mis-nested formatting tags by inserting appropriate close/open tags.
+        For example: <b>Bold <i>both</b> italic</i> should be treated as
+                    <b>Bold <i>both</i></b><i> italic</i>
+        """
+        # Find the formatting element in the list
+        format_index = None
+        for i, elem in enumerate(self.formatting_elements):
+            if elem.tag == tag_name:
+                format_index = i
+                break
+                
+        if format_index is None:
+            # The tag isn't in our formatting elements, handle as normal
+            if len(self.unfinished) == 1:
+                return
+            node = self.unfinished.pop()
+            parent = self.unfinished[-1]
+            parent.children.append(node)
+            return
+            
+        # Get the formatting element
+        format_elem = self.formatting_elements[format_index]
+        
+        # First, close all tags opened after this formatting tag
+        tags_to_reopen = []
+        while self.unfinished[-1] != format_elem:
+            node = self.unfinished.pop()
+            parent = self.unfinished[-1]
+            parent.children.append(node)
+            
+            # If this is a formatting tag that needs to be reopened, remember it
+            if node.tag in self.FORMATTING_TAGS and node in self.formatting_elements:
+                tags_to_reopen.append(node)
+                # Remove from formatting elements as we'll add a new one later
+                self.formatting_elements.remove(node)
+                
+        # Now close the actual formatting tag we're targeting
+        node = self.unfinished.pop()  # This should be format_elem
+        parent = self.unfinished[-1]
+        parent.children.append(node)
+        self.formatting_elements.remove(format_elem)
+        
+        # Reopen tags that we had to close, in the original order
+        for tag_elem in reversed(tags_to_reopen):
+            # Create a new element with the same attributes
+            new_elem = Element(tag_elem.tag, tag_elem.attributes, self.unfinished[-1])
+            self.unfinished.append(new_elem)
+            self.formatting_elements.append(new_elem)
             
     def handle_special_nesting(self, tag):
         """

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Advanced HTML Features Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .section { border: 1px solid #ccc; padding: 10px; margin-bottom: 20px; }
+        pre { background-color: #f5f5f5; padding: 10px; border: 1px solid #ddd; overflow: auto; }
+        b { color: blue; }
+        i { color: green; }
+        u { color: purple; }
+    </style>
+    <script>
+        // This is a script tag with angle brackets
+        function testFunction() {
+            let x = 10;
+            if (x < 20) {
+                console.log("x is less than 20");
+            }
+            
+            // This shouldn't be interpreted as HTML
+            let html = "<div>This looks like HTML</div>";
+            console.log(html);
+            
+            // This should not be treated as a closing script tag
+            // </script is not the end
+        }
+    </script>
+</head>
+<body>
+    <h1>Testing Advanced HTML Features</h1>
+    
+    <div class="section">
+        <h2>1. Script Tag Handling</h2>
+        <p>The browser should ignore HTML-like content inside script tags:</p>
+        <script>
+            // This content has angle brackets but should be treated as plain text
+            let example = "Testing < and > characters";
+            let elements = ["<p>", "<div>", "</div>"];
+            
+            // This example shows HTML tags
+            document.write("<p>This is written by JavaScript</p>");
+            
+            /* 
+             * This multiline comment contains HTML-like content:
+             * <div>
+             *   <p>This is in a comment</p>
+             * </div>
+             */
+        </script>
+    </div>
+    
+    <div class="section">
+        <h2>2. Quoted Attributes</h2>
+        <p>The browser should correctly handle quoted attributes with spaces and angle brackets:</p>
+        
+        <div class="test example" style="color: red; background-color: #f0f0f0; padding: 5px;">
+            This div has attributes with spaces in quotes
+        </div>
+        
+        <a href="page.html?param=value&gt=10" title="Click > here for more">
+            This link has angle brackets in its attributes
+        </a>
+        
+        <br>
+        
+        <img src='image.jpg' alt='An image with a > symbol' style='border: 1px solid black; margin: 10px;'>
+    </div>
+    
+    <div class="section">
+        <h2>3. Mis-nested Formatting Tags</h2>
+        <p>The browser should handle mis-nested formatting tags properly:</p>
+        
+        <div class="example">
+            <b>Bold <i>both bold and italic</b> just italic</i>
+        </div>
+        
+        <div class="example">
+            <b>Bold <i>and italic <u>and underlined</b> just italic</i> just underlined</u>
+        </div>
+        
+        <div class="example">
+            <p>Text <b>bold <i>and italic</b> just italic</i> normal text</p>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>4. View Source Protocol</h2>
+        <p>To test the view-source protocol, load this page with:</p>
+        <pre>python main.py view-source:file:///path/to/test_advanced_html.html</pre>
+    </div>
+</body>
+</html> 

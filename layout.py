@@ -41,56 +41,133 @@ def lex(body):
     Lexical analyzer that returns a list of tokens (Text or Tag objects).
     Unfinished tags are dropped.
     Comments (<!-- ... -->) are skipped entirely.
+    Contents of <script> tags are treated as plain text until </script> is encountered.
+    Handles quoted attributes in tags properly.
     """
     tokens = []
     buffer = ""
-    in_tag = False
-    in_comment = False
-    comment_buffer = ""
+    
+    # States for our FSM
+    STATE_TEXT = 0          # Regular text outside tags
+    STATE_TAG = 1           # Inside a tag
+    STATE_COMMENT = 2       # Inside a comment
+    STATE_SCRIPT = 3        # Inside a script tag
+    STATE_QUOTE_SINGLE = 4  # Inside a single-quoted attribute
+    STATE_QUOTE_DOUBLE = 5  # Inside a double-quoted attribute
+    
+    state = STATE_TEXT
     
     i = 0
     while i < len(body):
         c = body[i]
         
-        # Check for comment start sequence
-        if not in_comment and c == '<' and i + 3 < len(body) and body[i:i+4] == '<!--':
-            # We're entering a comment
-            if buffer:
-                tokens.append(Text(buffer))
+        # Handle different states
+        if state == STATE_TEXT:
+            # Check for comment start
+            if c == '<' and i + 3 < len(body) and body[i:i+4] == '<!--':
+                if buffer:
+                    tokens.append(Text(buffer))
+                    buffer = ""
+                state = STATE_COMMENT
+                i += 4  # Skip over <!--
+                continue
+                
+            # Check if we're entering a script tag
+            elif c == '<' and i + 6 < len(body) and body[i:i+7].lower() == '<script':
+                if buffer:
+                    tokens.append(Text(buffer))
+                    buffer = ""
+                state = STATE_TAG
+                buffer = "script"  # Start accumulating the tag
+                i += 7  # Skip over <script
+                continue
+                
+            # Regular tag start
+            elif c == '<':
+                if buffer:
+                    tokens.append(Text(buffer))
+                    buffer = ""
+                state = STATE_TAG
+            else:
+                buffer += c
+                
+        elif state == STATE_TAG:
+            # Handle quoted attribute values
+            if c == '"':
+                buffer += c
+                state = STATE_QUOTE_DOUBLE
+            elif c == "'":
+                buffer += c
+                state = STATE_QUOTE_SINGLE
+            # End of tag
+            elif c == '>':
+                tag_text = buffer.strip()
+                tokens.append(Tag(tag_text))
                 buffer = ""
-            in_comment = True
-            i += 4  # Skip over <!--
-            continue
-            
-        # Check for comment end sequence
-        if in_comment and i + 2 < len(body) and body[i:i+3] == '-->':
-            # We're leaving a comment
-            in_comment = False
-            i += 3  # Skip over -->
-            continue
-            
-        # Skip characters while in comment
-        if in_comment:
-            i += 1
-            continue
-
-        # Normal token handling (unchanged from original implementation)
-        if c == "<":
-            if buffer:
-                tokens.append(Text(buffer))
-                buffer = ""
-            in_tag = True
-        elif c == ">":
-            if in_tag:
-                tokens.append(Tag(buffer.strip()))
-                buffer = ""
-                in_tag = False
-        else:
+                # Check if we just opened a script tag
+                if tag_text.lower() == "script" or tag_text.lower().startswith("script "):
+                    state = STATE_SCRIPT
+                else:
+                    state = STATE_TEXT
+            else:
+                buffer += c
+                
+        elif state == STATE_COMMENT:
+            # Check for comment end
+            if i + 2 < len(body) and body[i:i+3] == '-->':
+                state = STATE_TEXT
+                i += 3  # Skip over -->
+                continue
+                
+        elif state == STATE_SCRIPT:
+            # Check for script end tag
+            if c == '<' and i + 8 < len(body) and body[i:i+9].lower() == '</script>':
+                if buffer:
+                    tokens.append(Text(buffer))
+                    buffer = ""
+                tokens.append(Tag("/script"))
+                state = STATE_TEXT
+                i += 9  # Skip over </script>
+                continue
+            elif c == '<' and i + 8 < len(body) and body[i:i+8].lower() == '</script':
+                # Handle case where </script is followed by space, tab, newline, etc.
+                next_char = body[i+8] if i+8 < len(body) else ''
+                if next_char in ' \t\n\r\v/>':
+                    if buffer:
+                        tokens.append(Text(buffer))
+                        buffer = ""
+                    tokens.append(Tag("/script"))
+                    state = STATE_TEXT
+                    # Skip to the closing >
+                    while i < len(body) and body[i] != '>':
+                        i += 1
+                    i += 1  # Skip over >
+                    continue
+            else:
+                buffer += c
+                
+        elif state == STATE_QUOTE_DOUBLE:
             buffer += c
+            # Exit double quote state only on unescaped double quote
+            if c == '"' and body[i-1] != '\\':
+                state = STATE_TAG
+                
+        elif state == STATE_QUOTE_SINGLE:
+            buffer += c
+            # Exit single quote state only on unescaped single quote
+            if c == "'" and body[i-1] != '\\':
+                state = STATE_TAG
+                
         i += 1
             
-    if buffer and not in_comment:
-        tokens.append(Text(buffer))
+    # Handle any remaining buffer
+    if buffer:
+        if state == STATE_TEXT:
+            tokens.append(Text(buffer))
+        elif state == STATE_TAG:
+            # If we ended in a tag, treat it as text since it's incomplete
+            tokens.append(Text("<" + buffer))
+            
     return tokens
 
 
